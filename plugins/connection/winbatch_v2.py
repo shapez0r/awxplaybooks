@@ -253,9 +253,9 @@ class Connection(ConnectionBase):
             display.vv(f"WinBatch V2: SSH result - RC: {result.returncode}, STDOUT len: {len(result.stdout)}, STDERR len: {len(result.stderr)}")
             
             return {
-                'stdout': result.stdout,
-                'stderr': result.stderr,
-                'rc': result.returncode
+                'stdout': str(result.stdout or ''),
+                'stderr': str(result.stderr or ''),
+                'rc': int(result.returncode or 1)
             }
         except subprocess.TimeoutExpired:
             display.vv(f"WinBatch V2: SSH command timeout after {self.execution_timeout} seconds")
@@ -291,12 +291,17 @@ class Connection(ConnectionBase):
             
             display.vv(f"WinBatch V2: Command executed - RC: {result['rc']}")
             
-            return (result['stdout'], result['stderr'], result['rc'])
+            # Убеждаемся что возвращаем строки, а не другие типы
+            stdout = str(result.get('stdout', ''))
+            stderr = str(result.get('stderr', ''))
+            rc = int(result.get('rc', 1))
+            
+            return (stdout, stderr, rc)
             
         except Exception as e:
             error_msg = f"WinBatch V2: Command execution failed: {str(e)}"
             display.vv(error_msg)
-            return ("", error_msg, 1)
+            return ("", str(error_msg), 1)
 
     def _parse_command(self, cmd, task_id):
         """Простой парсер команд"""
