@@ -1,0 +1,82 @@
+---
+# WinBatch Revolutionary Plugin - Inventory Configuration
+# Настройка подключения к Windows серверам с использованием нашего революционного плагина
+
+all:
+  children:
+    windows_servers:
+      hosts:
+        windows-server-01:
+          ansible_host: 192.168.1.100
+          ansible_user: Administrator
+          ansible_password: "{{ vault_windows_password }}"
+          ansible_connection: winbatch  # Используем наш революционный плагин!
+          ansible_shell_type: powershell
+          ansible_winbatch_batch_size: 15
+          ansible_winbatch_status_interval: 3
+          ansible_winbatch_execution_timeout: 2400
+          
+        windows-server-02:
+          ansible_host: 192.168.1.101
+          ansible_user: Administrator
+          ansible_password: "{{ vault_windows_password }}"
+          ansible_connection: winbatch
+          ansible_shell_type: powershell
+          ansible_winbatch_batch_size: 20
+          ansible_winbatch_status_interval: 5
+          ansible_winbatch_execution_timeout: 3600
+          
+        windows-workstation-01:
+          ansible_host: 192.168.1.150
+          ansible_user: localadmin
+          ansible_password: "{{ vault_workstation_password }}"
+          ansible_connection: winbatch
+          ansible_shell_type: powershell
+          ansible_winbatch_batch_size: 10
+          ansible_winbatch_status_interval: 2
+          ansible_winbatch_execution_timeout: 1800
+      
+      vars:
+        # Общие переменные для всех Windows машин
+        ansible_port: 22  # SSH порт для WinBatch плагина
+        ansible_shell_type: powershell
+        ansible_become_method: runas
+        ansible_become_user: Administrator
+        
+        # WinBatch конфигурация по умолчанию
+        ansible_winbatch_batch_size: 20
+        ansible_winbatch_status_interval: 5
+        ansible_winbatch_execution_timeout: 3600
+        ansible_winbatch_enable_logging: true
+        ansible_winbatch_log_level: INFO
+        
+        # Переменные окружения
+        environment:
+          WINBATCH_PLUGIN_VERSION: "1.0.0"
+          WINBATCH_PERFORMANCE_MODE: "enabled"
+          ANSIBLE_PERSISTENT_CONNECT_TIMEOUT: 60
+          ANSIBLE_PERSISTENT_COMMAND_TIMEOUT: 300
+
+    # Группа для тестирования производительности
+    performance_test:
+      hosts:
+        windows-server-01:
+        windows-server-02:
+      vars:
+        # Настройки для максимальной производительности
+        ansible_winbatch_batch_size: 50
+        ansible_winbatch_status_interval: 10
+        ansible_winbatch_execution_timeout: 7200
+        performance_test_mode: true
+
+    # Группа для разработки и отладки
+    development:
+      hosts:
+        windows-workstation-01:
+      vars:
+        # Настройки для отладки
+        ansible_winbatch_batch_size: 5
+        ansible_winbatch_status_interval: 1
+        ansible_winbatch_execution_timeout: 600
+        ansible_winbatch_log_level: DEBUG
+        debug_mode: true 
