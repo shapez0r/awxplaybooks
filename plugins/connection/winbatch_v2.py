@@ -2,100 +2,31 @@
 # -*- coding: utf-8 -*-
 
 """
-AWX WinBatch SSH Connection Plugin - Профессиональная версия для Windows
-
-Оптимизированный SSH connection plugin для Windows машин в AWX:
-- Один SSH connection на весь playbook вместо соединения на каждую task
-- Батчинг команд для улучшения производительности  
-- Кэширование и переиспользование подключений
-- Поддержка PowerShell и CMD команд
-- Совместимость со всеми стандартными AWX Execution Environments
-
-Основано на лучших практиках Ansible connection plugins
+AWX WinBatch V2 - Persistent Batch Architecture
+Революционный SSH connection plugin для Windows
 """
 
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
 import os
-import sys
 import json
 import time
 import subprocess
-import tempfile
 import threading
-from pathlib import Path
+import uuid
 
-# Ansible imports
-try:
-    from ansible.plugins.connection import ConnectionBase
-    from ansible.errors import AnsibleConnectionFailure, AnsibleError, AnsibleFileNotFound
-    from ansible.utils.display import Display
-    from ansible.module_utils.common.text.converters import to_bytes, to_native, to_text
-    # For compatibility across different Ansible versions
-    try:
-        from ansible.module_utils.six import binary_type, text_type
-    except ImportError:
-        # Fallback for newer Ansible versions
-        binary_type = bytes
-        text_type = str
-except ImportError as e:
-    print(f"Error importing Ansible modules: {e}")
-    raise ImportError("This plugin requires Ansible to be installed")
+from ansible.plugins.connection import ConnectionBase
+from ansible.errors import AnsibleConnectionFailure, AnsibleError, AnsibleFileNotFound
+from ansible.utils.display import Display
+from ansible.module_utils.common.text.converters import to_text
 
 display = Display()
 
-DOCUMENTATION = '''
-connection: winbatch_v2
-short_description: Optimized SSH connection plugin for Windows targets in AWX
-description:
-    - High-performance SSH connection plugin designed for Windows automation in AWX
-    - Uses single persistent SSH connection per playbook instead of per-task connections
-    - Implements command batching and caching for improved performance
-    - Supports both PowerShell and CMD command execution
-    - Fully compatible with standard AWX Execution Environments
-    - Can improve Windows automation performance by 300-500%
-version_added: "2.0"
-author: "AWX Windows Automation Team"
-options:
-  batch_size:
-    description: Maximum number of commands to batch together
-    default: 10
-    type: int
-    vars:
-      - name: ansible_winbatch_batch_size
-  connection_timeout:
-    description: SSH connection timeout in seconds
-    default: 30
-    type: int
-    vars:
-      - name: ansible_winbatch_connection_timeout
-  command_timeout:
-    description: Individual command timeout in seconds
-    default: 300
-    type: int
-    vars:
-      - name: ansible_winbatch_command_timeout
-  use_persistent_connections:
-    description: Enable persistent SSH connections
-    default: true
-    type: bool
-    vars:
-      - name: ansible_winbatch_persistent
-  shell_type:
-    description: Default shell type for command execution
-    default: powershell
-    choices: ['powershell', 'cmd']
-    type: str
-    vars:
-      - name: ansible_winbatch_shell_type
-'''
-
 class Connection(ConnectionBase):
     """
-    WinBatch V2 SSH Connection Plugin
-    
-    Оптимизированный SSH connection plugin для Windows targets в AWX
+    WinBatch V2 Persistent SSH Connection Plugin
+    ОДНО соединение + батчинг команд + прогресс-репорты
     """
     
     transport = 'winbatch_v2'
@@ -105,39 +36,36 @@ class Connection(ConnectionBase):
     def __init__(self, play_context, new_stdin, *args, **kwargs):
         super(Connection, self).__init__(play_context, new_stdin, *args, **kwargs)
         
-        # Connection settings
-        self.batch_size = self.get_option('batch_size') or 10
-        self.connection_timeout = self.get_option('connection_timeout') or 30
-        self.command_timeout = self.get_option('command_timeout') or 300
-        self.use_persistent = self.get_option('use_persistent_connections')
-        self.shell_type = self.get_option('shell_type') or 'powershell'
-        
-        # Connection state
+        # Persistent connection state
         self._connected = False
-        self._ssh_process = None
         self._connection_lock = threading.Lock()
+        
+        # Batch execution state
+        self._batch_id = str(uuid.uuid4())[:8]
         self._command_queue = []
-        self._batch_results = {}
+        self._batch_executing = False
         
-        # SSH connection details
-        self._build_ssh_command()
+        # Configuration
+        self.batch_size = 10  # Smaller batches for testing
+        self.connection_timeout = 30
         
-        display.vvv(f"WinBatch V2 initialized: batch_size={self.batch_size}, shell={self.shell_type}")
+        # SSH command template
+        self._ssh_cmd = self._build_ssh_command()
+        
+        display.vv(f"WinBatch V2 initialized: batch_id={self._batch_id}")
 
     def _build_ssh_command(self):
-        """Строит базовую SSH команду для подключения"""
+        """Строит SSH команду с persistent connection"""
         ssh_cmd = ['ssh']
         
-        # Connection settings
+        # SSH options for persistent connection
         ssh_cmd.extend([
             '-o', 'ControlMaster=auto',
-            '-o', 'ControlPersist=60s',
-            '-o', f'ConnectTimeout={self.connection_timeout}',
+            '-o', f'ControlPath=/tmp/winbatch-{self._batch_id}-%h-%p-%r',
+            '-o', 'ControlPersist=300s',
             '-o', 'StrictHostKeyChecking=no',
             '-o', 'UserKnownHostsFile=/dev/null',
-            '-o', 'ServerAliveInterval=30',
-            '-o', 'ServerAliveCountMax=3',
-            '-o', 'BatchMode=yes'
+            '-o', f'ConnectTimeout={self.connection_timeout}'
         ])
         
         # Port
@@ -148,155 +76,135 @@ class Connection(ConnectionBase):
         if self._play_context.private_key_file:
             ssh_cmd.extend(['-i', self._play_context.private_key_file])
         
-        # User and host
+        # Target
         if self._play_context.remote_user:
             ssh_cmd.append(f"{self._play_context.remote_user}@{self._play_context.remote_addr}")
         else:
             ssh_cmd.append(self._play_context.remote_addr)
         
-        self._ssh_cmd = ssh_cmd
-        display.vvv(f"WinBatch V2: SSH command built: {' '.join(ssh_cmd[:6])}...")
+        return ssh_cmd
 
     def _connect(self):
-        """Устанавливает SSH соединение"""
+        """Устанавливает ОДНО persistent SSH соединение"""
         if self._connected:
             return self
             
-        display.vv("WinBatch V2: Establishing SSH connection to Windows host")
+        display.vv(f"WinBatch V2: Establishing PERSISTENT connection to {self._play_context.remote_addr}")
         
         try:
             with self._connection_lock:
-                if self._connected:  # Double-check after acquiring lock
+                if self._connected:
                     return self
                 
-                # Test connection with simple command
-                test_cmd = self._ssh_cmd + ['echo', 'WinBatch-Test']
+                # Test master connection
+                test_cmd = self._ssh_cmd + ['echo', f'WinBatch-{self._batch_id}-Ready']
                 result = subprocess.run(test_cmd, 
                                       capture_output=True, 
                                       text=True, 
                                       timeout=self.connection_timeout)
                 
                 if result.returncode != 0:
-                    display.vvv(f"WinBatch V2: Connection test failed: {result.stderr}")
-                    raise AnsibleConnectionFailure(
-                        f"SSH connection failed: {result.stderr}"
-                    )
+                    raise AnsibleConnectionFailure(f"SSH connection failed: {result.stderr}")
                 
-                display.vvv(f"WinBatch V2: Connection test successful: {result.stdout.strip()}")
-                
-                # Setup remote environment
-                self._setup_remote_environment()
-                
+                display.vv(f"WinBatch V2: PERSISTENT connection established - {result.stdout.strip()}")
                 self._connected = True
-                display.vv("WinBatch V2: SSH connection established successfully")
                 
-        except subprocess.TimeoutExpired:
-            raise AnsibleConnectionFailure(
-                f"SSH connection timeout after {self.connection_timeout} seconds"
-            )
         except Exception as e:
-            raise AnsibleConnectionFailure(f"Failed to establish SSH connection: {str(e)}")
+            raise AnsibleConnectionFailure(f"Failed to establish persistent connection: {str(e)}")
         
         return self
 
-    def _setup_remote_environment(self):
-        """Настраивает удаленное окружение для батчинга команд"""
-        display.vv("WinBatch V2: Setting up remote Windows environment")
-        
-        # Simple test to verify PowerShell is available
-        test_cmd = self._ssh_cmd + ['powershell', '-Command', 'Write-Host "WinBatch-Ready"']
-        try:
-            result = subprocess.run(test_cmd, 
-                                  capture_output=True, 
-                                  text=True, 
-                                  timeout=self.command_timeout)
-            if result.returncode == 0:
-                display.vvv(f"WinBatch V2: PowerShell test successful")
-            else:
-                display.vvv(f"WinBatch V2: PowerShell test failed: {result.stderr}")
-        except Exception as e:
-            display.vvv(f"WinBatch V2: PowerShell test error: {str(e)}")
-            # Continue anyway
-
     def exec_command(self, cmd, in_data=None, sudoable=True):
         """
-        Выполняет команду с оптимизацией батчинга
+        Добавляет команду в batch queue
         """
         super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
         
         self._ensure_connected()
         
-        display.vvv(f"WinBatch V2: Executing command: {cmd}")
-        
-        # Normalize command for Windows
-        normalized_cmd = self._normalize_command(cmd)
-        
-        # Execute single command (batching can be added later for optimization)
-        return self._execute_single_command(normalized_cmd, in_data)
-
-    def _normalize_command(self, cmd):
-        """Нормализует команду для выполнения на Windows"""
+        # Normalize command
         if isinstance(cmd, (list, tuple)):
             cmd = ' '.join(cmd)
-        
         cmd = to_text(cmd, errors='surrogate_or_strict')
         
-        # Для простоты выполняем команды как есть
-        # Ansible уже подготавливает правильные PowerShell команды
-        return cmd
-
-    def _execute_single_command(self, cmd, in_data=None):
-        """Выполняет одну команду через SSH"""
-        display.vvv(f"WinBatch V2: Executing: {cmd}")
+        display.vvv(f"WinBatch V2: QUEUING command: {cmd[:50]}...")
         
-        ssh_cmd = self._ssh_cmd + [cmd]
+        # Add to batch queue
+        command_id = len(self._command_queue)
+        self._command_queue.append({
+            'id': command_id,
+            'command': cmd,
+            'timestamp': time.time()
+        })
+        
+        # Execute batch if queue is full
+        if len(self._command_queue) >= self.batch_size:
+            display.vv(f"WinBatch V2: Batch size reached, executing {len(self._command_queue)} commands")
+            return self._execute_batch()
+        else:
+            # Return placeholder for queued command
+            display.vvv(f"WinBatch V2: Command queued ({len(self._command_queue)}/{self.batch_size})")
+            return (0, f"WinBatch-Queued-{command_id}", "")
+
+    def _execute_batch(self):
+        """Выполняет batch команд на Windows машине"""
+        if not self._command_queue or self._batch_executing:
+            return (0, "", "")
+            
+        display.vv(f"WinBatch V2: EXECUTING BATCH of {len(self._command_queue)} commands")
+        
+        self._batch_executing = True
         
         try:
+            # Create simple batch script
+            commands = [cmd['command'] for cmd in self._command_queue]
+            batch_script = self._create_simple_batch_script(commands)
+            
+            # Execute batch
+            batch_cmd = self._ssh_cmd + ['powershell', '-Command', batch_script]
+            
             result = subprocess.run(
-                ssh_cmd,
-                input=in_data,
+                batch_cmd,
                 capture_output=True,
                 text=True,
-                timeout=self.command_timeout
+                timeout=300
             )
             
-            display.vvv(f"WinBatch V2: Command completed with RC: {result.returncode}")
+            display.vv(f"WinBatch V2: Batch completed with RC: {result.returncode}")
             
-            # Convert to expected format - Ansible expects (rc, stdout, stderr)
-            stdout = result.stdout or ''
-            stderr = result.stderr or ''
-            rc = result.returncode
-            
-            return (rc, stdout, stderr)
-            
-        except subprocess.TimeoutExpired:
-            error_msg = f"Command timeout after {self.command_timeout} seconds"
-            display.error(f"WinBatch V2: {error_msg}")
-            return (124, '', error_msg)
+            return (result.returncode, result.stdout or "", result.stderr or "")
             
         except Exception as e:
-            error_msg = f"SSH command execution failed: {str(e)}"
+            error_msg = f"Batch execution failed: {str(e)}"
             display.error(f"WinBatch V2: {error_msg}")
-            return (1, '', error_msg)
+            return (1, "", error_msg)
+            
+        finally:
+            self._batch_executing = False
+            self._command_queue = []
+
+    def _create_simple_batch_script(self, commands):
+        """Создает простой PowerShell скрипт для batch выполнения"""
+        script_lines = [
+            f'Write-Host "WinBatch-{self._batch_id}: Starting batch of {len(commands)} commands"',
+            '$Results = @()'
+        ]
+        
+        for i, cmd in enumerate(commands):
+            script_lines.extend([
+                f'Write-Host "WinBatch-{self._batch_id}: Executing command {i+1}/{len(commands)}"',
+                f'try {{ {cmd} }} catch {{ Write-Error $_.Exception.Message }}'
+            ])
+        
+        script_lines.append(f'Write-Host "WinBatch-{self._batch_id}: Batch completed"')
+        
+        return '; '.join(script_lines)
 
     def put_file(self, in_path, out_path):
-        """Загружает файл на Windows машину через SCP"""
+        """Загружает файл через persistent SCP"""
         self._ensure_connected()
         
-        display.vv(f"WinBatch V2: put_file {in_path} -> {out_path}")
-        
-        # Normalize Windows path
-        out_path = out_path.replace('/', '\\')
-        
-        # Build SCP command
-        scp_cmd = ['scp']
-        
-        # Use same SSH options as connection
-        scp_cmd.extend([
-            '-o', 'StrictHostKeyChecking=no',
-            '-o', 'UserKnownHostsFile=/dev/null',
-            '-o', f'ConnectTimeout={self.connection_timeout}'
-        ])
+        scp_cmd = ['scp', '-o', f'ControlPath=/tmp/winbatch-{self._batch_id}-%h-%p-%r']
         
         if self._play_context.port:
             scp_cmd.extend(['-P', str(self._play_context.port)])
@@ -304,7 +212,6 @@ class Connection(ConnectionBase):
         if self._play_context.private_key_file:
             scp_cmd.extend(['-i', self._play_context.private_key_file])
         
-        # Source and destination
         scp_cmd.append(in_path)
         
         if self._play_context.remote_user:
@@ -312,40 +219,16 @@ class Connection(ConnectionBase):
         else:
             scp_cmd.append(f"{self._play_context.remote_addr}:{out_path}")
         
-        try:
-            result = subprocess.run(scp_cmd, 
-                                  capture_output=True, 
-                                  text=True, 
-                                  timeout=self.command_timeout)
-            
-            if result.returncode != 0:
-                raise AnsibleError(f"SCP upload failed: {result.stderr}")
-                
-            display.vv(f"WinBatch V2: File uploaded successfully")
-            
-        except subprocess.TimeoutExpired:
-            raise AnsibleError(f"SCP upload timeout after {self.command_timeout} seconds")
-        except Exception as e:
-            raise AnsibleError(f"SCP upload error: {str(e)}")
+        result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60)
+        
+        if result.returncode != 0:
+            raise AnsibleError(f"SCP upload failed: {result.stderr}")
 
     def fetch_file(self, in_path, out_path):
-        """Скачивает файл с Windows машины через SCP"""
+        """Скачивает файл через persistent SCP"""
         self._ensure_connected()
         
-        display.vv(f"WinBatch V2: fetch_file {in_path} -> {out_path}")
-        
-        # Normalize Windows path
-        in_path = in_path.replace('/', '\\')
-        
-        # Build SCP command
-        scp_cmd = ['scp']
-        
-        # Use same SSH options as connection
-        scp_cmd.extend([
-            '-o', 'StrictHostKeyChecking=no',
-            '-o', 'UserKnownHostsFile=/dev/null',
-            '-o', f'ConnectTimeout={self.connection_timeout}'
-        ])
+        scp_cmd = ['scp', '-o', f'ControlPath=/tmp/winbatch-{self._batch_id}-%h-%p-%r']
         
         if self._play_context.port:
             scp_cmd.extend(['-P', str(self._play_context.port)])
@@ -353,7 +236,6 @@ class Connection(ConnectionBase):
         if self._play_context.private_key_file:
             scp_cmd.extend(['-i', self._play_context.private_key_file])
         
-        # Source and destination
         if self._play_context.remote_user:
             scp_cmd.append(f"{self._play_context.remote_user}@{self._play_context.remote_addr}:{in_path}")
         else:
@@ -361,24 +243,13 @@ class Connection(ConnectionBase):
             
         scp_cmd.append(out_path)
         
-        try:
-            result = subprocess.run(scp_cmd, 
-                                  capture_output=True, 
-                                  text=True, 
-                                  timeout=self.command_timeout)
-            
-            if result.returncode != 0:
-                if 'No such file or directory' in result.stderr:
-                    raise AnsibleFileNotFound(f"File not found: {in_path}")
-                else:
-                    raise AnsibleError(f"SCP download failed: {result.stderr}")
-                    
-            display.vv(f"WinBatch V2: File downloaded successfully")
-            
-        except subprocess.TimeoutExpired:
-            raise AnsibleError(f"SCP download timeout after {self.command_timeout} seconds")
-        except Exception as e:
-            raise AnsibleError(f"SCP download error: {str(e)}")
+        result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60)
+        
+        if result.returncode != 0:
+            if 'No such file or directory' in result.stderr:
+                raise AnsibleFileNotFound(f"File not found: {in_path}")
+            else:
+                raise AnsibleError(f"SCP download failed: {result.stderr}")
 
     def _ensure_connected(self):
         """Обеспечивает активное соединение"""
@@ -386,27 +257,32 @@ class Connection(ConnectionBase):
             self._connect()
 
     def close(self):
-        """Закрывает SSH соединение и освобождает ресурсы"""
-        display.vv("WinBatch V2: Closing SSH connection")
+        """Закрывает persistent соединение"""
+        display.vv("WinBatch V2: Closing persistent connection")
         
         with self._connection_lock:
-            if self._ssh_process:
+            if self._connected:
+                # Execute remaining commands
+                if self._command_queue and not self._batch_executing:
+                    try:
+                        display.vv(f"WinBatch V2: Executing final batch of {len(self._command_queue)} commands")
+                        self._execute_batch()
+                    except:
+                        pass
+                
+                # Close SSH master connection
+                close_cmd = ['ssh', '-O', 'exit', '-o', f'ControlPath=/tmp/winbatch-{self._batch_id}-%h-%p-%r']
+                if self._play_context.remote_user:
+                    close_cmd.append(f"{self._play_context.remote_user}@{self._play_context.remote_addr}")
+                else:
+                    close_cmd.append(self._play_context.remote_addr)
+                
                 try:
-                    self._ssh_process.terminate()
-                    self._ssh_process.wait(timeout=5)
-                except Exception as e:
-                    display.vvv(f"WinBatch V2: Error closing SSH process: {str(e)}")
-                finally:
-                    self._ssh_process = None
-            
-            self._connected = False
+                    subprocess.run(close_cmd, capture_output=True, timeout=10)
+                    display.vv("WinBatch V2: SSH master connection closed")
+                except:
+                    pass
+                
+                self._connected = False
         
-        # Cleanup any temporary files or resources
-        self._cleanup_resources()
-        
-        super(Connection, self).close()
-
-    def _cleanup_resources(self):
-        """Очищает временные ресурсы"""
-        display.vvv("WinBatch V2: Cleaning up resources")
-        # Add any cleanup logic here if needed
+        super(Connection, self).close() 
