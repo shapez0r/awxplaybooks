@@ -25,7 +25,7 @@ import subprocess
 import tempfile
 import shutil
 from pathlib import Path
-from io import StringIO
+from io import StringIO, BytesIO
 import base64
 import uuid
 
@@ -256,21 +256,21 @@ class Connection(ConnectionBase):
             
             display.vv(f"WinBatch V2: Command executed - RC: {result['rc']}")
             
-            # Возвращаем file-like объекты как требует Ansible
+            # Возвращаем BytesIO объекты как требует Ansible
             stdout_str = str(result.get('stdout', ''))
             stderr_str = str(result.get('stderr', ''))
             rc = int(result.get('rc', 1))
             
-            # Создаем StringIO объекты
-            stdout_io = StringIO(stdout_str)
-            stderr_io = StringIO(stderr_str)
+            # Создаем BytesIO объекты
+            stdout_io = BytesIO(stdout_str.encode('utf-8'))
+            stderr_io = BytesIO(stderr_str.encode('utf-8'))
             
             return (stdout_io, stderr_io, rc)
             
         except Exception as e:
             error_msg = f"WinBatch V2: Command execution failed: {str(e)}"
             display.vv(error_msg)
-            return (StringIO(""), StringIO(str(error_msg)), 1)
+            return (BytesIO("".encode('utf-8')), BytesIO(str(error_msg).encode('utf-8')), 1)
 
     def _parse_command(self, cmd, task_id):
         """Простой парсер команд"""
