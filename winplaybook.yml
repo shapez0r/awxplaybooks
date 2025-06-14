@@ -2,6 +2,8 @@
 - name: Windows Directory Creation and Network Info
   hosts: all
   gather_facts: true
+  vars:
+    ansible_shell_type: powershell
   
   tasks:
     - name: Create directory C:\test
