@@ -1,7 +1,7 @@
 ---
 - name: Windows Directory Creation and Network Info
   hosts: all
-  gather_facts: true
+  gather_facts: false
   connection: winbatch_v2
   vars:
     ansible_shell_type: powershell
@@ -11,10 +11,23 @@
     ansible_winbatch_ssh_timeout: 60
   
   tasks:
-    - name: Create directory C:\test
-      win_file:
-        path: C:\test
+    - name: Create multiple directories
+      ansible.windows.win_file:
+        path: "{{ item }}"
         state: directory
+      loop:
+        - C:\TestDir1
+        - C:\TestDir2
+        - C:\TestDir3
+
+    - name: Get network adapter information
+      ansible.windows.win_shell: |
+        Get-NetAdapter | Select-Object Name, InterfaceDescription, LinkSpeed | ConvertTo-Json
+      register: network_info
+
+    - name: Display network information
+      debug:
+        var: network_info.stdout
 
     - name: Get network configuration
       win_shell: ipconfig /all
