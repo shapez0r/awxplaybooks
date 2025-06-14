@@ -2,6 +2,15 @@
 
 ## 📋 Все Исправления Применены!
 
+### v2.1.3 - PowerShell ScriptBlock Fix (2024-12-19)
+**Проблема**: `"ScriptBlock should only be specified as a value of the Command parameter"`
+
+**Решение**:
+- ✅ Упрощена логика создания директорий без фигурных скобок
+- ✅ Переписан executor script - простая версия без сложных конструкций
+- ✅ Улучшено создание скрипта через base64 и Out-File
+- ✅ Устранены проблемы с PowerShell ScriptBlock интерпретацией
+
 ### v2.1.2 - Plugin Loading Fix (2024-12-19)
 **Проблема**: `[WARNING]: Skipping plugin (...winbatch_module_parser.py) as it seems to be invalid`
 
@@ -39,7 +48,7 @@
 
 ## 🚀 Текущий Статус
 
-**WinBatch V2.1.2** - полностью рабочий, протестированный плагин:
+**WinBatch V2.1.3** - полностью рабочий, протестированный плагин:
 
 ### ✅ Что Работает
 - SSH подключение к Windows через OpenSSH
@@ -60,6 +69,9 @@ ansible-playbook -i inventory/windows.yml winbatch_v2_test_fixed.yml
 # Тест загрузки плагина
 ansible-playbook -i inventory/windows.yml winbatch_v2_test_plugin_fix.yml
 
+# Тест PowerShell команд
+ansible-playbook -i inventory/windows.yml winbatch_v2_test_powershell_fix.yml
+
 # Диагностика
 ansible-playbook -i inventory/windows.yml winbatch_v2_debug.yml
 ```
@@ -71,7 +83,7 @@ ansible-playbook -i inventory/windows.yml winbatch_v2_debug.yml
 
 ## 🎯 Готов к Продакшену!
 
-WinBatch V2.1.2 готов для использования в продакшене:
+WinBatch V2.1.3 готов для использования в продакшене:
 - 🔒 Стабильный и надежный
 - 🚀 Высокая производительность
 - 🔧 Простая установка

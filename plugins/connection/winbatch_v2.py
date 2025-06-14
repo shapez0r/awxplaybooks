@@ -247,125 +247,76 @@ class Connection(ConnectionBase):
         # Создаем рабочую директорию
         batch_dir = f"C:\\temp\\winbatch_v2_{self.batch_session_id}"
         
-        # Шаг 1: Создаем директорию
-        create_dir_cmd = f'if (!(Test-Path "{batch_dir}")) {{ New-Item -ItemType Directory -Path "{batch_dir}" -Force | Out-Null; Write-Host "Created batch directory: {batch_dir}" }}'
+        # Шаг 1: Создаем директорию (простая команда без условий)
+        create_dir_cmd = f'New-Item -ItemType Directory -Path "{batch_dir}" -Force -ErrorAction SilentlyContinue | Out-Null; Write-Host "Created batch directory: {batch_dir}"'
         result = self._execute_ssh_command(['powershell', '-Command', create_dir_cmd])
         
         if result['rc'] != 0:
             raise AnsibleConnectionFailure(f"Failed to create batch directory: {result['stderr']}")
         
-        # Шаг 2: Создаем исполнитель через отдельные команды для избежания проблем с экранированием
-        executor_script_content = '''param([string]$TasksFile, [string]$StatusFile, [int]$StatusInterval = 5)
-
-$ErrorActionPreference = "Continue"
-Write-Host "WinBatch V2 Executor starting..."
-
+        # Создаем упрощенный исполнитель без сложных конструкций
+        simple_executor = '''param([string]$TasksFile, [string]$StatusFile)
+Write-Host "WinBatch V2 Simple Executor starting..."
 if (!(Test-Path $TasksFile)) {
     Write-Error "Tasks file not found: $TasksFile"
     exit 1
 }
-
-try {
-    $TasksContent = Get-Content $TasksFile -Raw
-    $Tasks = $TasksContent | ConvertFrom-Json
-} catch {
-    Write-Error "Failed to parse tasks file: $_"
-    exit 1
-}
-
+$TasksContent = Get-Content $TasksFile -Raw
+$Tasks = $TasksContent | ConvertFrom-Json
 $Results = @()
 $TotalTasks = $Tasks.Count
-$CompletedTasks = 0
-
 Write-Host "Processing $TotalTasks tasks..."
-
 foreach ($Task in $Tasks) {
     $TaskStart = Get-Date
     $TaskResult = @{
         task_id = $Task.task_id
         name = $Task.name
         status = "running"
-        start_time = $TaskStart.ToString("yyyy-MM-dd HH:mm:ss")
         stdout = ""
         stderr = ""
         rc = 0
-        duration = 0
     }
-    
     try {
         Write-Host "Executing: $($Task.name)"
-        
-        if ($Task.command -match "Get-|Set-|New-|Remove-|Write-Host") {
-            $Output = Invoke-Expression $Task.command 2>&1
-            $TaskResult.stdout = $Output | Out-String
-            $TaskResult.rc = if ($LASTEXITCODE) { $LASTEXITCODE } else { 0 }
-        } 
-        elseif ($Task.command -match "mkdir|dir|copy|move|del") {
-            $Output = cmd /c "$($Task.command)" 2>&1
-            $TaskResult.stdout = $Output | Out-String
-            $TaskResult.rc = $LASTEXITCODE
-        }
-        else {
-            $Output = Invoke-Expression $Task.command 2>&1
-            $TaskResult.stdout = $Output | Out-String
-            $TaskResult.rc = if ($LASTEXITCODE) { $LASTEXITCODE } else { 0 }
-        }
-        
+        $Output = Invoke-Expression $Task.command 2>&1
+        $TaskResult.stdout = $Output | Out-String
+        $TaskResult.rc = if ($LASTEXITCODE) { $LASTEXITCODE } else { 0 }
         if ($TaskResult.rc -eq 0) {
             $TaskResult.status = "completed"
         } else {
             $TaskResult.status = "failed"
             $TaskResult.stderr = "Command exited with code $($TaskResult.rc)"
         }
-        
     } catch {
         $TaskResult.status = "failed"
         $TaskResult.stderr = $_.Exception.Message
         $TaskResult.rc = 1
-        Write-Host "Task failed: $($_.Exception.Message)"
     }
-    
-    $TaskEnd = Get-Date
-    $TaskResult.end_time = $TaskEnd.ToString("yyyy-MM-dd HH:mm:ss")
-    $TaskResult.duration = ($TaskEnd - $TaskStart).TotalSeconds
-    
     $Results += $TaskResult
-    $CompletedTasks++
-    
-    Write-Host "Task '$($Task.name)' completed with status: $($TaskResult.status)"
+    Write-Host "Task completed with status: $($TaskResult.status)"
 }
-
 $FinalResults = @{
     session_id = "''' + self.batch_session_id + '''"
     status = "completed"
     total_tasks = $TotalTasks
-    completed_tasks = $CompletedTasks
     results = $Results
-    execution_time = ($Results | Measure-Object duration -Sum).Sum
-    timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
 }
-
-try {
-    $FinalResults | ConvertTo-Json -Depth 4 | Set-Content "$TasksFile.final"
-    Write-Host "Results saved to: $TasksFile.final"
-} catch {
-    Write-Error "Failed to save results: $_"
-    exit 1
-}
-
-Write-Host "WinBatch V2 Executor completed successfully!"'''
+$FinalResults | ConvertTo-Json -Depth 4 | Set-Content "$TasksFile.final"
+Write-Host "WinBatch V2 Simple Executor completed!"'''
         
-        # Создаем скрипт через base64 для избежания проблем с кавычками
+        # Создаем скрипт через echo команду (избегаем сложных кавычек)
         import base64
-        script_b64 = base64.b64encode(executor_script_content.encode('utf-8')).decode('ascii')
+        script_b64 = base64.b64encode(simple_executor.encode('utf-8')).decode('ascii')
         
-        # Создаем скрипт через base64 декодирование
-        create_script_cmd = f'$scriptContent = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("{script_b64}")); $scriptContent | Set-Content "{batch_dir}\\executor_v2.ps1" -Encoding UTF8; Write-Host "Executor script created successfully"'
+        # Используем PowerShell для декодирования base64 и создания файла
+        create_script_cmd = f'[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("{script_b64}")) | Out-File -FilePath "{batch_dir}\\executor_v2.ps1" -Encoding UTF8'
         
         result = self._execute_ssh_command(['powershell', '-Command', create_script_cmd])
         
         if result['rc'] != 0:
             raise AnsibleConnectionFailure(f"Failed to create executor script: {result['stderr']}")
+        
+        display.vv("WinBatch V2: Simple executor script created successfully")
             
         self.batch_script_path = batch_dir
         display.vv(f"WinBatch V2: Environment setup completed at {self.batch_script_path}")
@@ -487,19 +438,11 @@ Write-Host "WinBatch V2 Executor completed successfully!"'''
         
         tasks_json = json.dumps(tasks, indent=2)
         
-        # Отправляем задачи на удаленную машину
-        upload_cmd = f'''
-$TasksJson = @"
-{tasks_json}
-"@
-try {{
-    $TasksJson | Set-Content "{tasks_file}" -Encoding UTF8
-    Write-Host "Tasks uploaded successfully"
-}} catch {{
-    Write-Error "Failed to upload tasks: $_"
-    exit 1
-}}
-'''
+        # Отправляем задачи на удаленную машину через base64
+        import base64
+        tasks_b64 = base64.b64encode(tasks_json.encode('utf-8')).decode('ascii')
+        
+        upload_cmd = f'[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("{tasks_b64}")) | Set-Content "{tasks_file}" -Encoding UTF8; Write-Host "Tasks uploaded successfully"'
         
         result = self._execute_ssh_command(['powershell', '-Command', upload_cmd])
         if result['rc'] != 0:

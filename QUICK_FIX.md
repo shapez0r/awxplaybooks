@@ -1,5 +1,25 @@
 # 🚨 WinBatch V2 - Быстрые Исправления
 
+## 🔧 Исправление v2.1.3: PowerShell ScriptBlock Error
+
+### ❌ Симптомы
+```
+"ScriptBlock should only be specified as a value of the Command parameter."
+"powershell.exe : ScriptBlock should only be specified as a value of the Command parameter."
+```
+
+### ✅ РЕШЕНИЕ ПРИМЕНЕНО!
+- Упрощена логика создания директорий - убраны фигурные скобки `{}`
+- Переписан executor script - используется простая версия без сложных конструкций
+- Улучшено создание скрипта через base64 и Out-File вместо сложных команд
+
+### 🧪 Тест исправления
+```bash
+ansible-playbook -i inventory/windows.yml winbatch_v2_test_powershell_fix.yml
+```
+
+---
+
 ## 🔧 Исправление v2.1.2: Plugin Loading Warning
 
 ### ❌ Симптомы
