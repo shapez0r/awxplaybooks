@@ -1,0 +1,19 @@
+---
+- name: Windows Directory Creation and Network Info
+  hosts: all
+  gather_facts: true
+  
+  tasks:
+    - name: Create directory C:\test
+      win_file:
+        path: C:\test
+        state: directory
+
+    - name: Get network configuration
+      win_shell: ipconfig /all
+      register: ipconfig_output
+
+    - name: Save ipconfig output to file
+      win_copy:
+        content: "{{ ipconfig_output.stdout }}"
+        dest: C:\test\network_info.txt
