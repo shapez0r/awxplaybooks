@@ -399,39 +399,27 @@ class Connection(ConnectionBase):
 
     def _ensure_connected(self):
         """Обеспечивает активное соединение"""
-        if not self.ssh_master_socket:
+        if not self.connection_established:
             self._connect()
 
     def close(self):
         """Закрывает соединение и очищает ресурсы"""
         display.vv("WinBatch V2: Closing connection and cleaning up")
-        
-        # Очищаем временную директорию
-        self._cleanup()
-        
         super(Connection, self).close()
 
-    def _cleanup(self):
-        """Очищает временные файлы"""
-        if self.temp_dir and os.path.exists(self.temp_dir):
-            try:
-                shutil.rmtree(self.temp_dir)
-            except:
-                pass
-
     def put_file(self, in_path, out_path):
-        """Загружает файл через SSH соединение"""
+        """Загружает файл через простое SSH соединение"""
         self._ensure_connected()
         
-        # Получаем параметры подключения - поддержка разных версий API
+        # Получаем параметры подключения
         play_context = getattr(self, '_play_context', None) or getattr(self, 'play_context', None)
         if not play_context:
             raise AnsibleError("Cannot access play context")
         
         scp_cmd = [
             'scp',
-            '-o', f'ControlPath={self.ssh_master_socket}',
-            '-o', 'ControlMaster=no',
+            '-o', 'StrictHostKeyChecking=no',
+            '-o', 'UserKnownHostsFile=/dev/null',
             '-P', str(play_context.port or 22),
             in_path,
             f'{play_context.remote_user}@{play_context.remote_addr}:{out_path}'
@@ -442,18 +430,18 @@ class Connection(ConnectionBase):
             raise AnsibleError(f"SCP upload failed: {result.stderr}")
 
     def fetch_file(self, in_path, out_path):
-        """Скачивает файл через SSH соединение"""
+        """Скачивает файл через простое SSH соединение"""
         self._ensure_connected()
         
-        # Получаем параметры подключения - поддержка разных версий API
+        # Получаем параметры подключения
         play_context = getattr(self, '_play_context', None) or getattr(self, 'play_context', None)
         if not play_context:
             raise AnsibleError("Cannot access play context")
         
         scp_cmd = [
             'scp',
-            '-o', f'ControlPath={self.ssh_master_socket}',
-            '-o', 'ControlMaster=no',
+            '-o', 'StrictHostKeyChecking=no',
+            '-o', 'UserKnownHostsFile=/dev/null',
             '-P', str(play_context.port or 22),
             f'{play_context.remote_user}@{play_context.remote_addr}:{in_path}',
             out_path
