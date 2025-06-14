@@ -1,0 +1,20 @@
+---
+- name: Test WinBatch V2 Connection
+  hosts: all
+  gather_facts: false  # Отключаем сбор фактов для проверки базового подключения
+  connection: winbatch_v2
+  vars:
+    ansible_shell_type: powershell
+    ansible_winbatch_batch_size: 5
+    ansible_winbatch_status_interval: 2
+    ansible_winbatch_execution_timeout: 60
+    ansible_winbatch_ssh_timeout: 30
+  
+  tasks:
+    - name: Test basic PowerShell command
+      raw: powershell -Command "Write-Host 'WinBatch V2 Test Connection Successful'; Get-Date"
+      register: test_result
+      
+    - name: Show test result
+      debug:
+        msg: "{{ test_result.stdout }}" 

@@ -197,6 +197,8 @@ class Connection(ConnectionBase):
     def _establish_ssh_connection(self):
         """Устанавливает SSH соединение используя стандартные методы"""
         
+        display.vv("WinBatch V2: Starting SSH connection establishment")
+        
         # Получаем параметры подключения - поддержка разных версий API
         play_context = getattr(self, '_play_context', None) or getattr(self, 'play_context', None)
         if not play_context:
@@ -205,6 +207,8 @@ class Connection(ConnectionBase):
         host = play_context.remote_addr
         user = play_context.remote_user
         port = play_context.port or 22
+        
+        display.vv(f"WinBatch V2: Connecting to {user}@{host}:{port}")
         
         # Создаем master socket для SSH multiplexing
         control_path = os.path.join(self.temp_dir, 'ssh_control')
@@ -217,6 +221,8 @@ class Connection(ConnectionBase):
             '-o', 'StrictHostKeyChecking=no',
             '-o', 'UserKnownHostsFile=/dev/null',
             '-o', f'ConnectTimeout={self.ssh_timeout}',
+            '-o', 'ServerAliveInterval=30',
+            '-o', 'ServerAliveCountMax=3',
             '-p', str(port),
             f'{user}@{host}',
             'echo "WinBatch V2 SSH connection established"'
@@ -226,100 +232,43 @@ class Connection(ConnectionBase):
         if play_context.private_key_file:
             ssh_cmd.extend(['-i', play_context.private_key_file])
         
-        display.vvv(f"WinBatch V2: SSH command: {' '.join(ssh_cmd)}")
+        display.vv(f"WinBatch V2: SSH command: {' '.join(ssh_cmd)}")
         
-        # Устанавливаем соединение
-        result = subprocess.run(ssh_cmd, 
-                              capture_output=True, 
-                              text=True, 
-                              timeout=self.ssh_timeout)
-        
-        if result.returncode != 0:
-            raise AnsibleConnectionFailure(f"SSH connection failed: {result.stderr}")
-        
-        self.ssh_master_socket = control_path
-        display.vv("WinBatch V2: SSH master connection established")
+        try:
+            # Устанавливаем соединение
+            result = subprocess.run(ssh_cmd, 
+                                  capture_output=True, 
+                                  text=True, 
+                                  timeout=self.ssh_timeout)
+            
+            display.vv(f"WinBatch V2: SSH result - RC: {result.returncode}, STDOUT: {result.stdout[:200]}, STDERR: {result.stderr[:200]}")
+            
+            if result.returncode != 0:
+                raise AnsibleConnectionFailure(f"SSH connection failed: {result.stderr}")
+            
+            self.ssh_master_socket = control_path
+            display.vv("WinBatch V2: SSH master connection established successfully")
+            
+        except subprocess.TimeoutExpired:
+            display.vv(f"WinBatch V2: SSH connection timeout after {self.ssh_timeout} seconds")
+            raise AnsibleConnectionFailure(f"SSH connection timeout after {self.ssh_timeout} seconds")
+        except Exception as e:
+            display.vv(f"WinBatch V2: SSH connection exception: {str(e)}")
+            raise AnsibleConnectionFailure(f"SSH connection error: {str(e)}")
 
     def _setup_remote_environment(self):
-        """Настраивает окружение на удаленной Windows машине"""
-        display.vv("WinBatch V2: Setting up remote environment")
+        """Настраивает минимальное окружение на удаленной Windows машине"""
+        display.vv("WinBatch V2: Setting up minimal remote environment")
         
-        # Создаем рабочую директорию
-        batch_dir = f"C:\\temp\\winbatch_v2_{self.batch_session_id}"
-        
-        # Шаг 1: Создаем директорию (простая команда без условий)
-        create_dir_cmd = f'New-Item -ItemType Directory -Path "{batch_dir}" -Force -ErrorAction SilentlyContinue | Out-Null; Write-Host "Created batch directory: {batch_dir}"'
-        result = self._execute_ssh_command(['powershell', '-Command', create_dir_cmd])
+        # Простая проверка подключения
+        test_cmd = 'echo "WinBatch V2 connection test successful"'
+        result = self._execute_ssh_command(test_cmd)
         
         if result['rc'] != 0:
-            raise AnsibleConnectionFailure(f"Failed to create batch directory: {result['stderr']}")
+            raise AnsibleConnectionFailure(f"Remote environment test failed: {result['stderr']}")
         
-        # Создаем упрощенный исполнитель без сложных конструкций
-        simple_executor = '''param([string]$TasksFile, [string]$StatusFile)
-Write-Host "WinBatch V2 Simple Executor starting..."
-if (!(Test-Path $TasksFile)) {
-    Write-Error "Tasks file not found: $TasksFile"
-    exit 1
-}
-$TasksContent = Get-Content $TasksFile -Raw
-$Tasks = $TasksContent | ConvertFrom-Json
-$Results = @()
-$TotalTasks = $Tasks.Count
-Write-Host "Processing $TotalTasks tasks..."
-foreach ($Task in $Tasks) {
-    $TaskStart = Get-Date
-    $TaskResult = @{
-        task_id = $Task.task_id
-        name = $Task.name
-        status = "running"
-        stdout = ""
-        stderr = ""
-        rc = 0
-    }
-    try {
-        Write-Host "Executing: $($Task.name)"
-        $Output = Invoke-Expression $Task.command 2>&1
-        $TaskResult.stdout = $Output | Out-String
-        $TaskResult.rc = if ($LASTEXITCODE) { $LASTEXITCODE } else { 0 }
-        if ($TaskResult.rc -eq 0) {
-            $TaskResult.status = "completed"
-        } else {
-            $TaskResult.status = "failed"
-            $TaskResult.stderr = "Command exited with code $($TaskResult.rc)"
-        }
-    } catch {
-        $TaskResult.status = "failed"
-        $TaskResult.stderr = $_.Exception.Message
-        $TaskResult.rc = 1
-    }
-    $Results += $TaskResult
-    Write-Host "Task completed with status: $($TaskResult.status)"
-}
-$FinalResults = @{
-    session_id = "''' + self.batch_session_id + '''"
-    status = "completed"
-    total_tasks = $TotalTasks
-    results = $Results
-}
-$FinalResults | ConvertTo-Json -Depth 4 | Set-Content "$TasksFile.final"
-Write-Host "WinBatch V2 Simple Executor completed!"'''
-        
-        # Создаем скрипт через более надежный метод
-        import base64
-        script_b64 = base64.b64encode(simple_executor.encode('utf-8')).decode('ascii')
-        
-        # Используем PowerShell для декодирования base64 и создания файла с правильным экранированием
-        create_script_cmd = f"""$base64Content = '{script_b64}'; [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($base64Content)) | Out-File -FilePath "{batch_dir}\\executor_v2.ps1" -Encoding UTF8; Write-Host "Executor script created successfully\""""
-        
-        result = self._execute_ssh_command(['powershell', '-Command', create_script_cmd])
-        
-        if result['rc'] != 0:
-            raise AnsibleConnectionFailure(f"Failed to create executor script: {result['stderr']}")
-        
-        display.vv("WinBatch V2: Simple executor script created successfully")
-            
-        self.batch_script_path = batch_dir
-        display.vv(f"WinBatch V2: Environment setup completed at {self.batch_script_path}")
+        display.vv("WinBatch V2: Remote environment ready")
+        self.batch_script_path = "C:\\temp"  # Простая рабочая директория
 
     def _execute_ssh_command(self, cmd, input_data=None):
         """Выполняет команду через SSH соединение"""
@@ -377,26 +326,30 @@ Write-Host "WinBatch V2 Simple Executor completed!"'''
             }
 
     def exec_command(self, cmd, in_data=None, sudoable=True):
-        """Добавляет команду в пакет для выполнения"""
-        self._ensure_connected()
+        """Выполняет команду напрямую без батчинга для простоты"""
+        display.vv(f"WinBatch V2: exec_command called with cmd: {cmd[:100]}...")
         
-        self.task_counter += 1
-        task_id = f"task_{self.task_counter}"
+        try:
+            self._ensure_connected()
+        except Exception as e:
+            display.vv(f"WinBatch V2: Connection failed in exec_command: {str(e)}")
+            raise
         
-        # Парсим команду
-        task_info = self._parse_command(cmd, task_id)
+        # Упрощенное выполнение - сразу выполняем команду без батчинга
+        display.vv("WinBatch V2: Executing command directly")
         
-        display.vv(f"WinBatch V2: Queuing task {task_id}: {task_info['name']}")
-        
-        # Добавляем задачу в очередь
-        self.batch_queue.append(task_info)
-        
-        # Если достигли размера пакета, выполняем пакет
-        if len(self.batch_queue) >= self.batch_size:
-            return self._execute_batch()
-        
-        # Возвращаем успешный результат для промежуточных задач
-        return ("Task queued for batch execution", "", 0)
+        try:
+            # Выполняем команду напрямую через SSH
+            result = self._execute_ssh_command(cmd)
+            
+            display.vv(f"WinBatch V2: Command executed - RC: {result['rc']}")
+            
+            return (result['stdout'], result['stderr'], result['rc'])
+            
+        except Exception as e:
+            error_msg = f"WinBatch V2: Command execution failed: {str(e)}"
+            display.vv(error_msg)
+            return ("", error_msg, 1)
 
     def _parse_command(self, cmd, task_id):
         """Простой парсер команд"""
@@ -427,36 +380,48 @@ Write-Host "WinBatch V2 Simple Executor completed!"'''
             
         display.vv(f"WinBatch V2: Executing batch of {len(self.batch_queue)} tasks")
         
-        # Создаем файлы для задач
-        timestamp = int(time.time())
-        tasks_file = f"{self.batch_script_path}\\tasks_{timestamp}.json"
-        status_file = f"{self.batch_script_path}\\status_{timestamp}.json"
-        
-        # Подготавливаем задачи
-        tasks = list(self.batch_queue)
-        self.batch_queue = []  # Очищаем очередь
-        
-        tasks_json = json.dumps(tasks, indent=2)
-        
-        # Отправляем задачи на удаленную машину через base64 с надежным экранированием
-        import base64
-        tasks_b64 = base64.b64encode(tasks_json.encode('utf-8')).decode('ascii')
-        
-        upload_cmd = f"""$tasksContent = '{tasks_b64}'; [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($tasksContent)) | Set-Content "{tasks_file}" -Encoding UTF8; Write-Host "Tasks uploaded successfully\""""
-        
-        result = self._execute_ssh_command(['powershell', '-Command', upload_cmd])
-        if result['rc'] != 0:
-            return ("Failed to upload tasks", result['stderr'], result['rc'])
-        
-        # Запускаем исполнитель
-        executor_cmd = f'powershell -ExecutionPolicy Bypass -File "{self.batch_script_path}\\executor_v2.ps1" -TasksFile "{tasks_file}" -StatusFile "{status_file}" -StatusInterval {self.status_interval}'
-        
-        display.vv(f"WinBatch V2: Starting batch executor with {len(tasks)} tasks")
-        
-        result = self._execute_ssh_command(executor_cmd)
-        
-        # Получаем результаты
-        return self._collect_batch_results(tasks_file, len(tasks))
+        try:
+            # Создаем файлы для задач
+            timestamp = int(time.time())
+            tasks_file = f"{self.batch_script_path}\\tasks_{timestamp}.json"
+            status_file = f"{self.batch_script_path}\\status_{timestamp}.json"
+            
+            # Подготавливаем задачи
+            tasks = list(self.batch_queue)
+            self.batch_queue = []  # Очищаем очередь
+            
+            tasks_json = json.dumps(tasks, indent=2)
+            display.vv(f"WinBatch V2: Tasks JSON prepared: {tasks_json[:200]}...")
+            
+            # Отправляем задачи на удаленную машину через base64 с надежным экранированием
+            import base64
+            tasks_b64 = base64.b64encode(tasks_json.encode('utf-8')).decode('ascii')
+            
+            upload_cmd = f"""$tasksContent = '{tasks_b64}'; [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($tasksContent)) | Set-Content "{tasks_file}" -Encoding UTF8; Write-Host "Tasks uploaded successfully\""""
+            
+            display.vv("WinBatch V2: Uploading tasks to remote machine...")
+            result = self._execute_ssh_command(['powershell', '-Command', upload_cmd])
+            if result['rc'] != 0:
+                display.vv(f"WinBatch V2: Failed to upload tasks: {result['stderr']}")
+                return ("Failed to upload tasks", result['stderr'], result['rc'])
+            
+            display.vv("WinBatch V2: Tasks uploaded successfully")
+            
+            # Запускаем исполнитель
+            executor_cmd = f'powershell -ExecutionPolicy Bypass -File "{self.batch_script_path}\\executor_v2.ps1" -TasksFile "{tasks_file}" -StatusFile "{status_file}" -StatusInterval {self.status_interval}'
+            
+            display.vv(f"WinBatch V2: Starting batch executor with {len(tasks)} tasks")
+            display.vv(f"WinBatch V2: Executor command: {executor_cmd}")
+            
+            result = self._execute_ssh_command(executor_cmd)
+            display.vv(f"WinBatch V2: Executor finished with RC: {result['rc']}")
+            
+            # Получаем результаты
+            return self._collect_batch_results(tasks_file, len(tasks))
+            
+        except Exception as e:
+            display.vv(f"WinBatch V2: Exception in _execute_batch: {str(e)}")
+            return (f"Batch execution failed: {str(e)}", "", 1)
 
     def _collect_batch_results(self, tasks_file, task_count):
         """Собирает результаты выполнения пакета"""
@@ -489,27 +454,31 @@ Write-Host "WinBatch V2 Simple Executor completed!"'''
             
         try:
             batch_results = json.loads(result['stdout'])
-            display.vv(f"WinBatch V2: Batch completed. {batch_results['completed_tasks']} tasks executed.")
+            display.vv(f"WinBatch V2: Batch completed. {len(batch_results['results'])} tasks executed.")
             
             # Формируем сводный отчет
             summary = f"WinBatch V2 execution completed!\n"
             summary += f"Session: {batch_results['session_id']}\n"
             summary += f"Total tasks: {batch_results['total_tasks']}\n"
-            summary += f"Completed: {batch_results['completed_tasks']}\n"
-            summary += f"Execution time: {batch_results.get('execution_time', 'N/A')}s\n\n"
+            summary += f"Status: {batch_results['status']}\n\n"
             
             success_count = 0
             for task_result in batch_results['results']:
                 status_icon = "✅" if task_result['status'] == 'completed' else "❌"
-                summary += f"{status_icon} {task_result['name']} ({task_result['duration']:.2f}s)\n"
+                summary += f"{status_icon} {task_result['name']}\n"
                 if task_result['status'] == 'completed':
                     success_count += 1
                 if task_result['stdout']:
-                    summary += f"   Output: {task_result['stdout'][:100]}...\n"
+                    summary += f"   Output: {task_result['stdout'][:200]}\n"
                 if task_result['stderr']:
                     summary += f"   Error: {task_result['stderr']}\n"
                     
             summary += f"\nSuccess rate: {success_count}/{task_count} ({100*success_count/task_count:.1f}%)"
+            
+            # Возвращаем результат первой задачи для совместимости
+            if batch_results['results']:
+                first_result = batch_results['results'][0]
+                return (first_result['stdout'], first_result['stderr'], first_result['rc'])
             
             return (summary, "", 0)
             
