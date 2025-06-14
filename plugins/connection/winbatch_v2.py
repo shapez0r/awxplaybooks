@@ -139,9 +139,10 @@ class PersistentSSHConnection:
             
             ps_lines.extend([
                 f'Write-Host "WinBatch-Task-{i+1}-of-{len(commands)}"',
-                f'try {{ {ps_cmd}; $ExitCode_{i} = 0; $Output_{i} = "Success" }} catch {{ $Output_{i} = $_.Exception.Message; $ExitCode_{i} = 1 }}',
+                f'$ExitCode_{i} = 0; $Output_{i} = ""',
+                f'try {{ {ps_cmd}; $Output_{i} = "Success" }} catch {{ $Output_{i} = $_.Exception.Message; $ExitCode_{i} = 1 }}',
                 f'Write-Host "Task-{i+1}-Result: RC=$ExitCode_{i}"',
-                f'if ($Output_{i}) {{ $Output_{i} | Out-String | Write-Host }}'
+                f'if ($Output_{i} -and $Output_{i} -ne "") {{ Write-Host $Output_{i} }}'
             ])
         
         ps_lines.append('Write-Host "WinBatch-Batch-Complete"')
