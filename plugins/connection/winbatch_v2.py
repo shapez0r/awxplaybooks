@@ -251,12 +251,44 @@ class Connection(ConnectionBase):
             
             display.vv(f"WinBatch V2 BATCH: SSH execution completed in {execution_time:.1f}s")
             
-            return (result.returncode, result.stdout, result.stderr)
+            # Фильтруем SSH warnings из stderr
+            filtered_stderr = self._filter_ssh_warnings(result.stderr)
+            
+            return (result.returncode, result.stdout, filtered_stderr)
             
         except subprocess.TimeoutExpired:
             return (1, "", "Batch execution timeout (300s)")
         except Exception as e:
             return (1, "", f"SSH execution failed: {str(e)}")
+
+    def _filter_ssh_warnings(self, stderr):
+        """Фильтрует SSH warnings из stderr"""
+        if not stderr:
+            return stderr
+            
+        # SSH warnings которые нужно убрать
+        ssh_warnings = [
+            "Warning: Permanently added",
+            "Warning: Identity file",
+            "Warning: the ECDSA host key",
+            "Warning: the RSA host key",
+            "Warning: the ED25519 host key",
+            "Pseudo-terminal will not be allocated",
+            "stdin: is not a tty"
+        ]
+        
+        filtered_lines = []
+        for line in stderr.split('\n'):
+            is_warning = any(warning in line for warning in ssh_warnings)
+            if not is_warning and line.strip():
+                filtered_lines.append(line)
+        
+        filtered_stderr = '\n'.join(filtered_lines)
+        
+        if filtered_stderr != stderr:
+            display.vv(f"WinBatch V2 BATCH: Filtered SSH warnings from stderr")
+            
+        return filtered_stderr
 
     def _wait_for_batch_completion(self):
         """Ждет завершения batch другим процессом"""
