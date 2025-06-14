@@ -25,6 +25,7 @@ import subprocess
 import tempfile
 import shutil
 from pathlib import Path
+from io import StringIO
 
 # Добавляем текущую директорию в Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -138,7 +139,7 @@ class Connection(ConnectionBase):
         self.execution_timeout = self._get_option_with_fallback('execution_timeout', 3600)
         self.ssh_timeout = self._get_option_with_fallback('ssh_timeout', 60)
         
-        display.vvv(f"WinBatch V2 Plugin initialized: batch_size={self.batch_size}")
+        display.vv(f"WinBatch V2 Plugin initialized: batch_size={self.batch_size}")
 
     def _get_option_with_fallback(self, option_name, default_value):
         """Получает опцию с fallback на переменные хоста/группы"""
@@ -297,9 +298,9 @@ class Connection(ConnectionBase):
             
             display.vv(f"WinBatch V2: Command executed - RC: {result['rc']}")
             
-            # Убеждаемся что возвращаем строки, а не другие типы
-            stdout = str(result.get('stdout', ''))
-            stderr = str(result.get('stderr', ''))
+            # Убеждаемся что возвращаем file-like объекты, а не строки
+            stdout = StringIO(str(result.get('stdout', '')))
+            stderr = StringIO(str(result.get('stderr', '')))
             rc = int(result.get('rc', 1))
             
             return (stdout, stderr, rc)
@@ -307,7 +308,7 @@ class Connection(ConnectionBase):
         except Exception as e:
             error_msg = f"WinBatch V2: Command execution failed: {str(e)}"
             display.vv(error_msg)
-            return ("", str(error_msg), 1)
+            return (StringIO(""), StringIO(str(error_msg)), 1)
 
     def _parse_command(self, cmd, task_id):
         """Простой парсер команд"""
