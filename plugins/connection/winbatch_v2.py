@@ -169,22 +169,20 @@ class Connection(ConnectionBase):
                 if self._connected:  # Double-check after acquiring lock
                     return self
                 
-                # Test connection
-                test_cmd = self._ssh_cmd + ['echo', 'WinBatch-Connection-Test']
+                # Test connection with simple command
+                test_cmd = self._ssh_cmd + ['echo', 'WinBatch-Test']
                 result = subprocess.run(test_cmd, 
                                       capture_output=True, 
                                       text=True, 
                                       timeout=self.connection_timeout)
                 
                 if result.returncode != 0:
+                    display.vvv(f"WinBatch V2: Connection test failed: {result.stderr}")
                     raise AnsibleConnectionFailure(
                         f"SSH connection failed: {result.stderr}"
                     )
                 
-                if 'WinBatch-Connection-Test' not in result.stdout:
-                    raise AnsibleConnectionFailure(
-                        "SSH connection established but response invalid"
-                    )
+                display.vvv(f"WinBatch V2: Connection test successful: {result.stdout.strip()}")
                 
                 # Setup remote environment
                 self._setup_remote_environment()
@@ -205,28 +203,20 @@ class Connection(ConnectionBase):
         """Настраивает удаленное окружение для батчинга команд"""
         display.vv("WinBatch V2: Setting up remote Windows environment")
         
-        # Create working directory
-        setup_commands = [
-            # PowerShell setup
-            'powershell -Command "if (!(Test-Path C:\\Temp\\WinBatch)) { New-Item -Path C:\\Temp\\WinBatch -ItemType Directory -Force }"',
-            # Test PowerShell execution policy
-            'powershell -Command "Get-ExecutionPolicy"',
-            # Set execution policy if needed (for current user only)
-            'powershell -Command "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force"'
-        ]
-        
-        for cmd in setup_commands:
-            ssh_cmd = self._ssh_cmd + [cmd]
-            try:
-                result = subprocess.run(ssh_cmd, 
-                                      capture_output=True, 
-                                      text=True, 
-                                      timeout=self.command_timeout)
-                display.vvv(f"WinBatch V2: Setup command result: {result.returncode}")
-            except Exception as e:
-                display.vvv(f"WinBatch V2: Setup command warning: {str(e)}")
-                # Continue even if some setup commands fail
-                continue
+        # Simple test to verify PowerShell is available
+        test_cmd = self._ssh_cmd + ['powershell', '-Command', 'Write-Host "WinBatch-Ready"']
+        try:
+            result = subprocess.run(test_cmd, 
+                                  capture_output=True, 
+                                  text=True, 
+                                  timeout=self.command_timeout)
+            if result.returncode == 0:
+                display.vvv(f"WinBatch V2: PowerShell test successful")
+            else:
+                display.vvv(f"WinBatch V2: PowerShell test failed: {result.stderr}")
+        except Exception as e:
+            display.vvv(f"WinBatch V2: PowerShell test error: {str(e)}")
+            # Continue anyway
 
     def exec_command(self, cmd, in_data=None, sudoable=True):
         """
@@ -251,14 +241,8 @@ class Connection(ConnectionBase):
         
         cmd = to_text(cmd, errors='surrogate_or_strict')
         
-        # Determine if this should be PowerShell or CMD
-        if self.shell_type == 'powershell' or any(ps_indicator in cmd.lower() for ps_indicator in [
-            'get-', 'set-', 'new-', 'remove-', 'invoke-', '$_', 'foreach-object', 'where-object'
-        ]):
-            # PowerShell command
-            if not cmd.strip().startswith('powershell'):
-                cmd = f'powershell -Command "{cmd.replace('"', '`"')}"'
-        
+        # Для простоты выполняем команды как есть
+        # Ansible уже подготавливает правильные PowerShell команды
         return cmd
 
     def _execute_single_command(self, cmd, in_data=None):
