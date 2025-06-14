@@ -92,7 +92,7 @@ class PersistentSSHConnection:
     
     def execute_single_command(self, command):
         """Execute single command on persistent connection"""
-        if not self.connected or not self.process:
+        if not self.connected:
             return (1, "", "Connection not established")
             
         try:
