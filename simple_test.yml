@@ -1,0 +1,33 @@
+---
+- name: Simple WinBatch V2 Test
+  hosts: all
+  gather_facts: false
+  connection: winbatch_v2
+  vars:
+    ansible_port: 22
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+  
+  tasks:
+    - name: Test basic echo command
+      raw: echo "Hello from WinBatch V2"
+      register: echo_result
+      
+    - name: Display echo result
+      debug:
+        var: echo_result.stdout_lines
+        
+    - name: Test PowerShell command
+      raw: powershell -Command "Get-Date"
+      register: date_result
+      
+    - name: Display date result
+      debug:
+        var: date_result.stdout_lines
+        
+    - name: Test simple file operation
+      raw: powershell -Command "Test-Path C:\\"
+      register: path_result
+      
+    - name: Display path test result
+      debug:
+        var: path_result.stdout_lines 
