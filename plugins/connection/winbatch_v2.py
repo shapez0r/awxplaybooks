@@ -355,16 +355,12 @@ try {
 
 Write-Host "WinBatch V2 Executor completed successfully!"'''
         
-        # Создаем временный файл для скрипта
+        # Создаем скрипт через base64 для избежания проблем с кавычками
         import base64
         script_b64 = base64.b64encode(executor_script_content.encode('utf-8')).decode('ascii')
         
-        # Создаем скрипт через base64 для избежания проблем с кавычками
-        create_script_cmd = f'''
-$scriptContent = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("{script_b64}"))
-$scriptContent | Set-Content "{batch_dir}\\executor_v2.ps1" -Encoding UTF8
-Write-Host "Executor script created successfully"
-'''
+        # Создаем скрипт через base64 декодирование
+        create_script_cmd = f'$scriptContent = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("{script_b64}")); $scriptContent | Set-Content "{batch_dir}\\executor_v2.ps1" -Encoding UTF8; Write-Host "Executor script created successfully"'
         
         result = self._execute_ssh_command(['powershell', '-Command', create_script_cmd])
         

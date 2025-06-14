@@ -1,5 +1,26 @@
 # 🚨 WinBatch V2 - Быстрые Исправления
 
+## 🔧 Исправление v2.1.2: Plugin Loading Warning
+
+### ❌ Симптомы
+```
+[WARNING]: Skipping plugin (/runner/project/plugins/connection/winbatch_module_parser.py) 
+as it seems to be invalid: module 'ansible.plugins.connection.winbatch_module_parser' 
+has no attribute 'Connection'
+```
+
+### ✅ РЕШЕНИЕ ПРИМЕНЕНО!
+- Перемещен файл `winbatch_module_parser.py` в правильную директорию `plugins/module_utils/`
+- Ansible больше не пытается загрузить вспомогательный модуль как connection plugin
+- Устранены все предупреждения при загрузке плагина
+
+### 🧪 Тест исправления
+```bash
+ansible-playbook -i inventory/windows.yml winbatch_v2_test_plugin_fix.yml
+```
+
+---
+
 ## 🔧 Исправление v2.1.1: PowerShell Escaping Error
 
 ### ❌ Симптомы

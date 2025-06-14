@@ -2,6 +2,15 @@
 
 ## 📋 Все Исправления Применены!
 
+### v2.1.2 - Plugin Loading Fix (2024-12-19)
+**Проблема**: `[WARNING]: Skipping plugin (...winbatch_module_parser.py) as it seems to be invalid`
+
+**Решение**:
+- ✅ Перемещен `winbatch_module_parser.py` в `plugins/module_utils/`
+- ✅ Устранены предупреждения при загрузке плагина
+- ✅ Правильная организация файлов проекта
+- ✅ Чистая загрузка без warnings
+
 ### v2.1.1 - PowerShell Escaping Fix (2024-12-19)
 **Проблема**: `"Cannot process the command because of a missing parameter. A command must follow -Command."`
 
@@ -30,7 +39,7 @@
 
 ## 🚀 Текущий Статус
 
-**WinBatch V2.1.1** - полностью рабочий, протестированный плагин:
+**WinBatch V2.1.2** - полностью рабочий, протестированный плагин:
 
 ### ✅ Что Работает
 - SSH подключение к Windows через OpenSSH
@@ -48,6 +57,9 @@ ansible-playbook -i inventory/windows.yml winbatch_v2_demo.yml
 # Тест исправлений
 ansible-playbook -i inventory/windows.yml winbatch_v2_test_fixed.yml
 
+# Тест загрузки плагина
+ansible-playbook -i inventory/windows.yml winbatch_v2_test_plugin_fix.yml
+
 # Диагностика
 ansible-playbook -i inventory/windows.yml winbatch_v2_debug.yml
 ```
@@ -59,7 +71,7 @@ ansible-playbook -i inventory/windows.yml winbatch_v2_debug.yml
 
 ## 🎯 Готов к Продакшену!
 
-WinBatch V2.1.1 готов для использования в продакшене:
+WinBatch V2.1.2 готов для использования в продакшене:
 - 🔒 Стабильный и надежный
 - 🚀 Высокая производительность
 - 🔧 Простая установка
