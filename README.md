@@ -32,6 +32,7 @@ awxplaybooks/
 ├── ansible.cfg                        # ⚙️ Конфигурация
 ├── winbatch_v2_demo.yml              # 🎬 Полная демонстрация V2
 ├── winbatch_v2_test.yml              # 🧪 Простой тест V2
+├── winbatch_v2_debug.yml             # 🔍 Диагностика проблем V2
 ├── winbatch_demo.yml                 # 📁 Демо для V1
 ├── WINBATCH_V2_SIMPLE_GUIDE.md       # 📚 Простое руководство V2
 └── WINBATCH_REVOLUTION_README.md     # 📁 Документация V1
@@ -96,6 +97,7 @@ windows_servers:
 ## 📚 Документация
 
 - **[WINBATCH_V2_SIMPLE_GUIDE.md](WINBATCH_V2_SIMPLE_GUIDE.md)** - Подробное руководство по V2
+- **[QUICK_FIX.md](QUICK_FIX.md)** - 🚨 Быстрое исправление ошибки play_context
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Устранение неполадок и FAQ
 - **[CHANGELOG.md](CHANGELOG.md)** - История изменений и обновлений
 - **[WINBATCH_REVOLUTION_README.md](WINBATCH_REVOLUTION_README.md)** - Документация по V1

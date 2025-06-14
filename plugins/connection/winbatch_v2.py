@@ -117,6 +117,12 @@ class Connection(ConnectionBase):
     def __init__(self, play_context, new_stdin, *args, **kwargs):
         super(Connection, self).__init__(play_context, new_stdin, *args, **kwargs)
         
+        # Совместимость с разными версиями Ansible API
+        if not hasattr(self, '_play_context') and hasattr(self, 'play_context'):
+            self._play_context = self.play_context
+        elif not hasattr(self, 'play_context') and hasattr(self, '_play_context'):
+            self.play_context = self._play_context
+        
         # Инициализация без внешних зависимостей
         self.ssh_process = None
         self.ssh_master_socket = None
@@ -144,11 +150,17 @@ class Connection(ConnectionBase):
         except:
             pass
         
-        # Fallback на переменные Ansible
+        # Fallback на переменные Ansible - поддержка разных версий API
         var_name = f'ansible_winbatch_{option_name}'
         try:
-            if hasattr(self.play_context, 'vars') and var_name in self.play_context.vars:
-                return self.play_context.vars[var_name]
+            # Новые версии Ansible
+            play_context = getattr(self, '_play_context', None)
+            if not play_context:
+                # Старые версии Ansible
+                play_context = getattr(self, 'play_context', None)
+            
+            if play_context and hasattr(play_context, 'vars') and var_name in play_context.vars:
+                return play_context.vars[var_name]
         except:
             pass
         
@@ -185,10 +197,14 @@ class Connection(ConnectionBase):
     def _establish_ssh_connection(self):
         """Устанавливает SSH соединение используя стандартные методы"""
         
-        # Получаем параметры подключения
-        host = self.play_context.remote_addr
-        user = self.play_context.remote_user
-        port = self.play_context.port or 22
+        # Получаем параметры подключения - поддержка разных версий API
+        play_context = getattr(self, '_play_context', None) or getattr(self, 'play_context', None)
+        if not play_context:
+            raise AnsibleConnectionFailure("Cannot access play context")
+            
+        host = play_context.remote_addr
+        user = play_context.remote_user
+        port = play_context.port or 22
         
         # Создаем master socket для SSH multiplexing
         control_path = os.path.join(self.temp_dir, 'ssh_control')
@@ -207,8 +223,8 @@ class Connection(ConnectionBase):
         ]
         
         # Если есть SSH ключ
-        if self.play_context.private_key_file:
-            ssh_cmd.extend(['-i', self.play_context.private_key_file])
+        if play_context.private_key_file:
+            ssh_cmd.extend(['-i', play_context.private_key_file])
         
         display.vvv(f"WinBatch V2: SSH command: {' '.join(ssh_cmd)}")
         
@@ -390,9 +406,14 @@ Write-Host "WinBatch V2 environment setup completed: $BatchDir"
         if not self.ssh_master_socket:
             raise AnsibleConnectionFailure("SSH connection not established")
         
-        host = self.play_context.remote_addr
-        user = self.play_context.remote_user
-        port = self.play_context.port or 22
+        # Получаем параметры подключения - поддержка разных версий API
+        play_context = getattr(self, '_play_context', None) or getattr(self, 'play_context', None)
+        if not play_context:
+            raise AnsibleConnectionFailure("Cannot access play context")
+            
+        host = play_context.remote_addr
+        user = play_context.remote_user
+        port = play_context.port or 22
         
         ssh_cmd = [
             'ssh',
@@ -632,13 +653,18 @@ try {{
         """Загружает файл через SSH соединение"""
         self._ensure_connected()
         
+        # Получаем параметры подключения - поддержка разных версий API
+        play_context = getattr(self, '_play_context', None) or getattr(self, 'play_context', None)
+        if not play_context:
+            raise AnsibleError("Cannot access play context")
+        
         scp_cmd = [
             'scp',
             '-o', f'ControlPath={self.ssh_master_socket}',
             '-o', 'ControlMaster=no',
-            '-P', str(self.play_context.port or 22),
+            '-P', str(play_context.port or 22),
             in_path,
-            f'{self.play_context.remote_user}@{self.play_context.remote_addr}:{out_path}'
+            f'{play_context.remote_user}@{play_context.remote_addr}:{out_path}'
         ]
         
         result = subprocess.run(scp_cmd, capture_output=True, text=True)
@@ -649,12 +675,17 @@ try {{
         """Скачивает файл через SSH соединение"""
         self._ensure_connected()
         
+        # Получаем параметры подключения - поддержка разных версий API
+        play_context = getattr(self, '_play_context', None) or getattr(self, 'play_context', None)
+        if not play_context:
+            raise AnsibleError("Cannot access play context")
+        
         scp_cmd = [
             'scp',
             '-o', f'ControlPath={self.ssh_master_socket}',
             '-o', 'ControlMaster=no',
-            '-P', str(self.play_context.port or 22),
-            f'{self.play_context.remote_user}@{self.play_context.remote_addr}:{in_path}',
+            '-P', str(play_context.port or 22),
+            f'{play_context.remote_user}@{play_context.remote_addr}:{in_path}',
             out_path
         ]
         
