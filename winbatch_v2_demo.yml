@@ -3,7 +3,7 @@
 # Этот playbook демонстрирует революционный плагин, который работает с любым стандартным AWX EE
 
 - name: "🚀 WinBatch V2 Demo - No Custom EE Required!"
-  hosts: windows_servers
+  hosts: all
   gather_facts: true
   connection: winbatch_v2  # Используем самодостаточную версию!
   
@@ -14,6 +14,7 @@
     ansible_winbatch_status_interval: 3  # Интервал обновления статуса
     ansible_winbatch_execution_timeout: 1800  # Максимальное время выполнения
     ansible_winbatch_ssh_timeout: 60  # Таймаут SSH соединения
+    ansible_shell_type: powershell
     
     # Переменные для демонстрации
     test_directories:

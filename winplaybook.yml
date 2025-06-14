@@ -2,8 +2,10 @@
 - name: Windows Directory Creation and Network Info
   hosts: all
   gather_facts: true
+  connection: winbatch_v2
   vars:
     ansible_shell_type: powershell
+    ansible_winbatch_batch_size: 20
   
   tasks:
     - name: Create directory C:\test
