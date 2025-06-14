@@ -26,6 +26,8 @@ import tempfile
 import shutil
 from pathlib import Path
 from io import StringIO
+import base64
+import uuid
 
 # Добавляем текущую директорию в Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -108,85 +110,37 @@ options:
 '''
 
 class Connection(ConnectionBase):
-    """Self-contained WinBatch Connection Plugin"""
+    """WinBatch V2 Connection Plugin - Simplified version with direct SSH execution"""
     
     transport = 'winbatch_v2'
-    has_pipelining = True
-    become_methods = ['runas']
-    allow_executable = True
+    allow_executable = False
+    has_pipelining = False
     
     def __init__(self, play_context, new_stdin, *args, **kwargs):
         super(Connection, self).__init__(play_context, new_stdin, *args, **kwargs)
         
-        # Совместимость с разными версиями Ansible API
-        if not hasattr(self, '_play_context') and hasattr(self, 'play_context'):
-            self._play_context = self.play_context
-        elif not hasattr(self, 'play_context') and hasattr(self, '_play_context'):
-            self.play_context = self._play_context
-        
-        # Инициализация без внешних зависимостей
-        self.ssh_process = None
-        self.ssh_master_socket = None
-        self.batch_queue = []
-        self.task_counter = 0
-        self.batch_session_id = None
+        # Упрощенные настройки
+        self.batch_size = 20
+        self.execution_timeout = 300
         self.batch_script_path = None
-        self.temp_dir = None
-        
-        # Получаем параметры из host_vars или group_vars
-        self.batch_size = self._get_option_with_fallback('batch_size', 20)
-        self.status_interval = self._get_option_with_fallback('status_interval', 5)
-        self.execution_timeout = self._get_option_with_fallback('execution_timeout', 3600)
-        self.ssh_timeout = self._get_option_with_fallback('ssh_timeout', 60)
+        self.connection_established = False
         
         display.vv(f"WinBatch V2 Plugin initialized: batch_size={self.batch_size}")
 
-    def _get_option_with_fallback(self, option_name, default_value):
-        """Получает опцию с fallback на переменные хоста/группы"""
-        try:
-            # Пытаемся получить из опций плагина
-            value = self.get_option(option_name)
-            if value is not None:
-                return value
-        except:
-            pass
-        
-        # Fallback на переменные Ansible - поддержка разных версий API
-        var_name = f'ansible_winbatch_{option_name}'
-        try:
-            # Новые версии Ansible
-            play_context = getattr(self, '_play_context', None)
-            if not play_context:
-                # Старые версии Ansible
-                play_context = getattr(self, 'play_context', None)
-            
-            if play_context and hasattr(play_context, 'vars') and var_name in play_context.vars:
-                return play_context.vars[var_name]
-        except:
-            pass
-        
-        return default_value
-
     def _connect(self):
-        """Устанавливает минимальное соединение"""
+        """Устанавливает минимальное подключение к Windows хосту"""
+        if self.connection_established:
+            return self
+            
         display.vv("WinBatch V2: Establishing minimal connection")
         
-        # Генерируем уникальный ID сессии
-        self.batch_session_id = f"winbatch_v2_{int(time.time())}_{os.getpid()}"
-        
-        # Создаем временную директорию
-        self.temp_dir = tempfile.mkdtemp(prefix='winbatch_v2_')
-        
         try:
-            # Простая проверка подключения
             self._setup_remote_environment()
-            
+            self.connection_established = True
             display.vv("WinBatch V2: Connection established successfully")
-            
         except Exception as e:
-            self._cleanup()
             raise AnsibleConnectionFailure(f"Failed to establish WinBatch V2 connection: {str(e)}")
-            
+        
         return self
 
     def _setup_remote_environment(self):
@@ -298,9 +252,9 @@ class Connection(ConnectionBase):
             
             display.vv(f"WinBatch V2: Command executed - RC: {result['rc']}")
             
-            # Убеждаемся что возвращаем file-like объекты, а не строки
-            stdout = StringIO(str(result.get('stdout', '')))
-            stderr = StringIO(str(result.get('stderr', '')))
+            # Возвращаем строки как требует Ansible
+            stdout = str(result.get('stdout', ''))
+            stderr = str(result.get('stderr', ''))
             rc = int(result.get('rc', 1))
             
             return (stdout, stderr, rc)
@@ -308,7 +262,7 @@ class Connection(ConnectionBase):
         except Exception as e:
             error_msg = f"WinBatch V2: Command execution failed: {str(e)}"
             display.vv(error_msg)
-            return (StringIO(""), StringIO(str(error_msg)), 1)
+            return ("", str(error_msg), 1)
 
     def _parse_command(self, cmd, task_id):
         """Простой парсер команд"""
@@ -353,7 +307,6 @@ class Connection(ConnectionBase):
             display.vv(f"WinBatch V2: Tasks JSON prepared: {tasks_json[:200]}...")
             
             # Отправляем задачи на удаленную машину через base64 с надежным экранированием
-            import base64
             tasks_b64 = base64.b64encode(tasks_json.encode('utf-8')).decode('ascii')
             
             upload_cmd = f"""$tasksContent = '{tasks_b64}'; [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($tasksContent)) | Set-Content "{tasks_file}" -Encoding UTF8; Write-Host "Tasks uploaded successfully\""""
