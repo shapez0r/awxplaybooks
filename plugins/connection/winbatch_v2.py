@@ -125,6 +125,10 @@ class Connection(ConnectionBase):
         self.batch_script_path = None
         self.connection_established = False
         
+        # Для совместимости со старым кодом
+        self.batch_queue = []
+        self.status_interval = 5
+        
         display.vv(f"WinBatch V2 Plugin initialized: batch_size={self.batch_size}")
 
     def _connect(self):
@@ -185,7 +189,7 @@ class Connection(ConnectionBase):
             'ssh',
             '-o', 'StrictHostKeyChecking=no',
             '-o', 'UserKnownHostsFile=/dev/null',
-            '-o', f'ConnectTimeout={self.ssh_timeout}',
+            '-o', 'ConnectTimeout=60',
             '-o', 'ServerAliveInterval=30',
             '-o', 'ServerAliveCountMax=3',
             '-p', str(port),
