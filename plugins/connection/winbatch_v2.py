@@ -74,24 +74,16 @@ class PersistentSSHConnection:
         ssh_cmd.append(f"{self.user}@{self.host}")
         
         try:
-            # Start persistent SSH connection
-            self.process = subprocess.Popen(
-                ssh_cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=0
-            )
+            # Test connection first
+            test_cmd = ssh_cmd + ['echo', 'WinBatch-Connection-Ready']
+            result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=30)
             
-            # Test connection
-            test_result = self.execute_single_command('echo "WinBatch-Connection-Ready"')
-            if test_result[0] == 0 and "WinBatch-Connection-Ready" in test_result[1]:
+            if result.returncode == 0 and "WinBatch-Connection-Ready" in result.stdout:
                 self.connected = True
                 display.vv(f"WinBatch V2: PERSISTENT connection established to {self.connection_id}")
                 return True
             else:
-                display.error(f"WinBatch V2: Connection test failed: {test_result}")
+                display.error(f"WinBatch V2: Connection test failed: RC={result.returncode}, stdout='{result.stdout}', stderr='{result.stderr}'")
                 return False
                 
         except Exception as e:
