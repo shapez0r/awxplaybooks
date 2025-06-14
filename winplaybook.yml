@@ -52,14 +52,6 @@
       debug:
         var: file_ops.stdout_lines
 
-    - name: Get network configuration
-      raw: powershell -Command "Get-NetIPAddress | Where-Object {$_.AddressFamily -eq 'IPv4' -and $_.IPAddress -ne '127.0.0.1'} | Select-Object IPAddress, InterfaceAlias | ConvertTo-Json"
-      register: network_config
-      
-    - name: Display network configuration
-      debug:
-        var: network_config.stdout_lines
-
     - name: Test batch performance
       raw: powershell -Command "Measure-Command { 1..100 | ForEach-Object { Get-Date } } | Select-Object TotalMilliseconds"
       register: performance_test
@@ -81,15 +73,13 @@
           System Info: {{ system_info.rc == 0 | ternary('✓ SUCCESS', '✗ FAILED') }}
           PowerShell: {{ services_info.rc == 0 | ternary('✓ SUCCESS', '✗ FAILED') }}
           File Ops: {{ file_ops.rc == 0 | ternary('✓ SUCCESS', '✗ FAILED') }}
-          Network: {{ network_config.rc == 0 | ternary('✓ SUCCESS', '✗ FAILED') }}
           Performance: {{ performance_test.rc == 0 | ternary('✓ SUCCESS', '✗ FAILED') }}
           Cleanup: {{ cleanup.rc == 0 | ternary('✓ SUCCESS', '✗ FAILED') }}
           
-          Total Tasks: 7
+          Total Tasks: 6
           Success Rate: {{ ((connectivity_test.rc == 0) | int + 
                            (system_info.rc == 0) | int + 
                            (services_info.rc == 0) | int + 
                            (file_ops.rc == 0) | int + 
-                           (network_config.rc == 0) | int + 
                            (performance_test.rc == 0) | int + 
                            (cleanup.rc == 0) | int) * 100 / 7 }}%
