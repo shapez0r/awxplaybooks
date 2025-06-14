@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-AWX WinBatch V2 - TRUE Single SSH Connection
-НАСТОЯЩЕЕ единственное SSH соединение через persistent connection
+AWX WinBatch V2 - TRUE BATCH MODE
+1 SSH соединение + все задачи за раз + выполнение на Windows
 """
 
 from __future__ import (absolute_import, division, print_function)
@@ -16,9 +16,8 @@ import subprocess
 import threading
 import uuid
 import tempfile
-import signal
-import atexit
 import fcntl
+import atexit
 
 from ansible.plugins.connection import ConnectionBase
 from ansible.errors import AnsibleConnectionFailure, AnsibleError, AnsibleFileNotFound
@@ -27,154 +26,15 @@ from ansible.module_utils.common.text.converters import to_text
 
 display = Display()
 
-# Global persistent connections
-_PERSISTENT_CONNECTIONS = {}
-_CONNECTION_LOCK = threading.Lock()
-
-class PersistentSSHConnection:
-    """Persistent SSH connection that stays alive"""
-    
-    def __init__(self, host, user, port=22, key_file=None):
-        self.host = host
-        self.user = user
-        self.port = port
-        self.key_file = key_file
-        self.process = None
-        self.stdin = None
-        self.stdout = None
-        self.stderr = None
-        self.connected = False
-        self.task_queue = []
-        self.connection_id = f"{user}@{host}:{port}"
-        
-    def connect(self):
-        """Establishes persistent SSH connection"""
-        if self.connected and self.process and self.process.poll() is None:
-            display.vv(f"WinBatch V2: Reusing existing connection to {self.connection_id}")
-            return True
-            
-        display.vv(f"WinBatch V2: Establishing PERSISTENT connection to {self.connection_id}")
-        
-        # Build SSH command
-        ssh_cmd = ['ssh']
-        ssh_cmd.extend(['-o', 'StrictHostKeyChecking=no'])
-        ssh_cmd.extend(['-o', 'UserKnownHostsFile=/dev/null'])
-        ssh_cmd.extend(['-o', 'ConnectTimeout=30'])
-        ssh_cmd.extend(['-o', 'ServerAliveInterval=30'])
-        ssh_cmd.extend(['-o', 'ServerAliveCountMax=3'])
-        ssh_cmd.extend(['-o', 'ControlMaster=yes'])
-        ssh_cmd.extend(['-o', f'ControlPath=/tmp/ssh-{self.connection_id.replace("@", "-").replace(":", "-")}'])
-        ssh_cmd.extend(['-o', 'ControlPersist=300'])
-        
-        if self.port != 22:
-            ssh_cmd.extend(['-p', str(self.port)])
-        if self.key_file:
-            ssh_cmd.extend(['-i', self.key_file])
-            
-        ssh_cmd.append(f"{self.user}@{self.host}")
-        
-        try:
-            # Test connection first
-            test_cmd = ssh_cmd + ['echo', 'WinBatch-Connection-Ready']
-            result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=30)
-            
-            if result.returncode == 0 and "WinBatch-Connection-Ready" in result.stdout:
-                self.connected = True
-                display.vv(f"WinBatch V2: PERSISTENT connection established to {self.connection_id}")
-                return True
-            else:
-                display.error(f"WinBatch V2: Connection test failed: RC={result.returncode}, stdout='{result.stdout}', stderr='{result.stderr}'")
-                return False
-                
-        except Exception as e:
-            display.error(f"WinBatch V2: Failed to establish connection: {str(e)}")
-            return False
-    
-    def execute_single_command(self, command):
-        """Execute single command on persistent connection"""
-        if not self.connected:
-            return (1, "", "Connection not established")
-            
-        try:
-            # Use SSH control connection
-            ssh_cmd = ['ssh']
-            ssh_cmd.extend(['-o', f'ControlPath=/tmp/ssh-{self.connection_id.replace("@", "-").replace(":", "-")}'])
-            
-            if self.port != 22:
-                ssh_cmd.extend(['-p', str(self.port)])
-            if self.key_file:
-                ssh_cmd.extend(['-i', self.key_file])
-                
-            ssh_cmd.append(f"{self.user}@{self.host}")
-            ssh_cmd.append(command)
-            
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=60)
-            return (result.returncode, result.stdout, result.stderr)
-            
-        except Exception as e:
-            return (1, "", str(e))
-    
-    def execute_batch_commands(self, commands):
-        """Execute multiple commands in single batch"""
-        if not commands:
-            return (0, "", "")
-            
-        display.vv(f"WinBatch V2: Executing {len(commands)} commands in SINGLE batch")
-        
-        # Create mega PowerShell script
-        ps_lines = [
-            'Write-Host "WinBatch-Batch-Start"',
-            '$Results = @{}'
-        ]
-        
-        for i, cmd in enumerate(commands):
-            # Convert bash/shell commands to PowerShell equivalents
-            if cmd.startswith('echo '):
-                # Convert echo command to PowerShell Write-Host
-                echo_text = cmd[5:].strip().strip('"').strip("'")
-                ps_cmd = f'Write-Host "{echo_text}"'
-            else:
-                # For other commands, try to execute as-is
-                ps_cmd = cmd.replace('"', '`"').replace('$', '`$')
-            
-            ps_lines.extend([
-                f'Write-Host "WinBatch-Task-{i+1}-of-{len(commands)}"',
-                f'$ExitCode_{i} = 0; $Output_{i} = ""',
-                f'try {{ {ps_cmd}; $Output_{i} = "Success" }} catch {{ $Output_{i} = $_.Exception.Message; $ExitCode_{i} = 1 }}',
-                f'Write-Host "Task-{i+1}-Result: RC=$ExitCode_{i}"',
-                f'if ($Output_{i} -and $Output_{i} -ne "") {{ Write-Host $Output_{i} }}'
-            ])
-        
-        ps_lines.append('Write-Host "WinBatch-Batch-Complete"')
-        
-        mega_script = '; '.join(ps_lines)
-        powershell_command = f'powershell -Command "{mega_script}"'
-        
-        start_time = time.time()
-        result = self.execute_single_command(powershell_command)
-        execution_time = time.time() - start_time
-        
-        display.vv(f"WinBatch V2: Batch execution completed in {execution_time:.1f}s")
-        
-        return result
-    
-    def close(self):
-        """Close persistent connection"""
-        if self.process:
-            try:
-                self.process.terminate()
-                self.process.wait(timeout=5)
-            except:
-                try:
-                    self.process.kill()
-                except:
-                    pass
-        self.connected = False
-        display.vv(f"WinBatch V2: Closed connection to {self.connection_id}")
+# Global state for TRUE BATCH MODE
+_BATCH_STATE_FILE = "/tmp/winbatch_batch_state.json"
+_BATCH_LOCK_FILE = "/tmp/winbatch_batch.lock"
+_BATCH_LOCK = threading.Lock()
 
 class Connection(ConnectionBase):
     """
-    WinBatch V2 - TRUE Single SSH Connection
+    WinBatch V2 - TRUE BATCH MODE
+    Собирает ВСЕ задачи, передает за 1 раз, 1 SSH соединение
     """
     
     transport = 'winbatch_v2'
@@ -185,84 +45,267 @@ class Connection(ConnectionBase):
         super(Connection, self).__init__(play_context, new_stdin, *args, **kwargs)
         
         self.connection_timeout = 30
-        self.connection_key = f"{self._play_context.remote_user}@{self._play_context.remote_addr}:{self._play_context.port or 22}"
-        self.task_commands = []
+        self.batch_id = f"batch_{self._play_context.remote_addr}_{self._play_context.remote_user}_{int(time.time())}"
+        self.host_key = f"{self._play_context.remote_user}@{self._play_context.remote_addr}:{self._play_context.port or 22}"
         
-        display.vv(f"WinBatch V2: Initialized for {self.connection_key}")
+        display.vv(f"WinBatch V2 BATCH: Initialized {self.batch_id}")
 
-    def _get_persistent_connection(self):
-        """Get or create persistent connection"""
-        with _CONNECTION_LOCK:
-            if self.connection_key not in _PERSISTENT_CONNECTIONS:
-                display.vv(f"WinBatch V2: Creating NEW persistent connection for {self.connection_key}")
-                conn = PersistentSSHConnection(
-                    host=self._play_context.remote_addr,
-                    user=self._play_context.remote_user,
-                    port=self._play_context.port or 22,
-                    key_file=self._play_context.private_key_file
-                )
-                _PERSISTENT_CONNECTIONS[self.connection_key] = conn
-            else:
-                display.vv(f"WinBatch V2: Reusing existing persistent connection for {self.connection_key}")
+    def _get_batch_state(self):
+        """Получает состояние batch"""
+        try:
+            if os.path.exists(_BATCH_STATE_FILE):
+                with open(_BATCH_STATE_FILE, 'r') as f:
+                    return json.load(f)
+        except:
+            pass
+        return {}
+
+    def _save_batch_state(self, state):
+        """Сохраняет состояние batch"""
+        try:
+            with open(_BATCH_STATE_FILE, 'w') as f:
+                json.dump(state, f, indent=2)
+        except Exception as e:
+            display.warning(f"WinBatch V2: Failed to save batch state: {e}")
+
+    def _add_task_to_batch(self, command):
+        """Добавляет задачу в глобальный batch"""
+        with _BATCH_LOCK:
+            state = self._get_batch_state()
+            
+            # Инициализируем batch для этого хоста если нужно
+            if self.host_key not in state:
+                state[self.host_key] = {
+                    'tasks': [],
+                    'batch_started': False,
+                    'batch_completed': False,
+                    'start_time': time.time(),
+                    'connection_info': {
+                        'host': self._play_context.remote_addr,
+                        'user': self._play_context.remote_user,
+                        'port': self._play_context.port or 22,
+                        'key_file': self._play_context.private_key_file
+                    }
+                }
+            
+            # Добавляем задачу
+            task = {
+                'id': len(state[self.host_key]['tasks']) + 1,
+                'command': command,
+                'timestamp': time.time()
+            }
+            
+            state[self.host_key]['tasks'].append(task)
+            self._save_batch_state(state)
+            
+            display.vv(f"WinBatch V2 BATCH: Added task {task['id']}: {command[:50]}... (Total: {len(state[self.host_key]['tasks'])})")
+            
+            return len(state[self.host_key]['tasks'])
+
+    def _is_batch_ready(self, command):
+        """Определяет готов ли batch к выполнению"""
+        # Эвристики для определения последней задачи
+        last_task_patterns = [
+            'echo', 'debug', 'Get-Date', 'Test-Path', 'Write-Host',
+            'cleanup', 'final', 'end', 'complete', 'finish',
+            'Get-Service', 'Get-Process', 'whoami', 'hostname'
+        ]
+        
+        cmd_lower = command.lower()
+        is_likely_last = any(pattern.lower() in cmd_lower for pattern in last_task_patterns)
+        
+        if is_likely_last:
+            display.vv(f"WinBatch V2 BATCH: Detected likely last task: {command[:50]}...")
+            return True
+            
+        # Также проверяем таймаут (если задачи не добавлялись 5 секунд)
+        state = self._get_batch_state()
+        if self.host_key in state and state[self.host_key]['tasks']:
+            last_task_time = max(task['timestamp'] for task in state[self.host_key]['tasks'])
+            if time.time() - last_task_time > 5:
+                display.vv(f"WinBatch V2 BATCH: Timeout reached, executing batch")
+                return True
+        
+        return False
+
+    def _execute_batch(self):
+        """Выполняет весь batch за ОДНО SSH соединение"""
+        with _BATCH_LOCK:
+            state = self._get_batch_state()
+            
+            if self.host_key not in state or state[self.host_key]['batch_completed']:
+                return (0, "Batch already completed", "")
+            
+            if state[self.host_key]['batch_started']:
+                # Ждем завершения другого процесса
+                return self._wait_for_batch_completion()
+            
+            # Помечаем что начали выполнение
+            state[self.host_key]['batch_started'] = True
+            self._save_batch_state(state)
+            
+            tasks = state[self.host_key]['tasks']
+            conn_info = state[self.host_key]['connection_info']
+            
+            display.vv(f"WinBatch V2 BATCH: Executing {len(tasks)} tasks in SINGLE SSH connection")
+            
+            try:
+                # Создаем МЕГА PowerShell скрипт
+                mega_script = self._create_mega_script(tasks)
                 
-            return _PERSISTENT_CONNECTIONS[self.connection_key]
+                # Выполняем через ЕДИНСТВЕННОЕ SSH соединение
+                result = self._execute_single_ssh_batch(conn_info, mega_script)
+                
+                # Помечаем как завершенный
+                state[self.host_key]['batch_completed'] = True
+                state[self.host_key]['result'] = result
+                state[self.host_key]['end_time'] = time.time()
+                self._save_batch_state(state)
+                
+                execution_time = state[self.host_key]['end_time'] - state[self.host_key]['start_time']
+                display.vv(f"WinBatch V2 BATCH: Completed {len(tasks)} tasks in {execution_time:.1f}s")
+                
+                return result
+                
+            except Exception as e:
+                display.error(f"WinBatch V2 BATCH: Execution failed: {str(e)}")
+                state[self.host_key]['batch_completed'] = True
+                state[self.host_key]['result'] = (1, "", str(e))
+                self._save_batch_state(state)
+                return (1, "", str(e))
+
+    def _create_mega_script(self, tasks):
+        """Создает МЕГА PowerShell скрипт для всех задач"""
+        script_lines = [
+            'Write-Host "WinBatch-MEGA-BATCH-START"',
+            f'Write-Host "Total tasks: {len(tasks)}"',
+            '$Global:BatchResults = @{}'
+        ]
+        
+        for i, task in enumerate(tasks):
+            cmd = task['command']
+            
+            # Конвертируем bash команды в PowerShell
+            if cmd.startswith('echo '):
+                echo_text = cmd[5:].strip().strip('"').strip("'")
+                ps_cmd = f'Write-Host "{echo_text}"'
+            elif cmd.startswith('whoami'):
+                ps_cmd = '$env:USERNAME'
+            elif cmd.startswith('hostname'):
+                ps_cmd = '$env:COMPUTERNAME'
+            elif cmd.startswith('pwd'):
+                ps_cmd = 'Get-Location'
+            else:
+                ps_cmd = cmd.replace('"', '`"').replace('$', '`$')
+            
+            script_lines.extend([
+                f'Write-Host "=== TASK {i+1}/{len(tasks)}: {cmd[:30]}... ==="',
+                f'$TaskStart_{i} = Get-Date',
+                f'$ExitCode_{i} = 0; $Output_{i} = ""',
+                f'try {{',
+                f'    $Output_{i} = {ps_cmd}',
+                f'    if ($Output_{i}) {{ Write-Host $Output_{i} }}',
+                f'}} catch {{',
+                f'    $Output_{i} = $_.Exception.Message',
+                f'    $ExitCode_{i} = 1',
+                f'    Write-Host "ERROR: $Output_{i}"',
+                f'}}',
+                f'$TaskEnd_{i} = Get-Date',
+                f'$TaskTime_{i} = ($TaskEnd_{i} - $TaskStart_{i}).TotalSeconds',
+                f'Write-Host "Task {i+1} completed: RC=$ExitCode_{i}, Time=$TaskTime_{i}s"',
+                f'$Global:BatchResults[{i}] = @{{ ExitCode=$ExitCode_{i}; Output=$Output_{i}; Time=$TaskTime_{i} }}',
+                ''
+            ])
+        
+        script_lines.extend([
+            'Write-Host "WinBatch-MEGA-BATCH-COMPLETE"',
+            f'Write-Host "All {len(tasks)} tasks completed"'
+        ])
+        
+        return '; '.join(script_lines)
+
+    def _execute_single_ssh_batch(self, conn_info, mega_script):
+        """Выполняет мега-скрипт через ЕДИНСТВЕННОЕ SSH соединение"""
+        ssh_cmd = ['ssh']
+        ssh_cmd.extend(['-o', 'StrictHostKeyChecking=no'])
+        ssh_cmd.extend(['-o', 'UserKnownHostsFile=/dev/null'])
+        ssh_cmd.extend(['-o', 'ConnectTimeout=30'])
+        ssh_cmd.extend(['-o', 'ServerAliveInterval=30'])
+        ssh_cmd.extend(['-o', 'ServerAliveCountMax=3'])
+        
+        if conn_info['port'] != 22:
+            ssh_cmd.extend(['-p', str(conn_info['port'])])
+        if conn_info['key_file']:
+            ssh_cmd.extend(['-i', conn_info['key_file']])
+            
+        ssh_cmd.append(f"{conn_info['user']}@{conn_info['host']}")
+        ssh_cmd.append(f'powershell -Command "{mega_script}"')
+        
+        display.vv(f"WinBatch V2 BATCH: Executing MEGA script via single SSH connection")
+        
+        start_time = time.time()
+        
+        try:
+            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=300)
+            execution_time = time.time() - start_time
+            
+            display.vv(f"WinBatch V2 BATCH: SSH execution completed in {execution_time:.1f}s")
+            
+            return (result.returncode, result.stdout, result.stderr)
+            
+        except subprocess.TimeoutExpired:
+            return (1, "", "Batch execution timeout (300s)")
+        except Exception as e:
+            return (1, "", f"SSH execution failed: {str(e)}")
+
+    def _wait_for_batch_completion(self):
+        """Ждет завершения batch другим процессом"""
+        display.vv("WinBatch V2 BATCH: Waiting for batch completion by another process...")
+        
+        timeout = 300  # 5 минут
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            state = self._get_batch_state()
+            
+            if (self.host_key in state and 
+                state[self.host_key].get('batch_completed', False) and
+                'result' in state[self.host_key]):
+                
+                result = state[self.host_key]['result']
+                display.vv("WinBatch V2 BATCH: Batch completed by another process")
+                return tuple(result)
+            
+            time.sleep(1)
+        
+        return (1, "", "Timeout waiting for batch completion")
 
     def _connect(self):
-        """Connect using persistent connection"""
-        conn = self._get_persistent_connection()
-        if not conn.connect():
-            raise AnsibleConnectionFailure(f"Failed to establish persistent connection to {self.connection_key}")
+        """Подключение не нужно - все делается в batch"""
         return self
 
     def exec_command(self, cmd, in_data=None, sudoable=True):
-        """Execute command through persistent connection"""
+        """Добавляет команду в batch или выполняет batch"""
         super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
         
-        # Ensure connection
-        self._connect()
-        
-        # Normalize command
+        # Нормализуем команду
         if isinstance(cmd, (list, tuple)):
             cmd = ' '.join(cmd)
         cmd = to_text(cmd, errors='surrogate_or_strict')
         
-        # Get persistent connection
-        conn = self._get_persistent_connection()
+        # Добавляем в batch
+        task_count = self._add_task_to_batch(cmd)
         
-        # Add to task queue
-        conn.task_queue.append(cmd)
-        
-        display.vv(f"WinBatch V2: Queued command: {cmd[:50]}... (Queue size: {len(conn.task_queue)})")
-        
-        # Check if this looks like the last task
-        if self._is_likely_last_task(cmd):
-            display.vv(f"WinBatch V2: Detected end of playbook, executing {len(conn.task_queue)} queued commands")
-            
-            # Execute all queued commands in single batch
-            result = conn.execute_batch_commands(conn.task_queue)
-            
-            # Clear queue
-            conn.task_queue = []
-            
-            return result
+        # Проверяем готов ли batch к выполнению
+        if self._is_batch_ready(cmd):
+            display.vv(f"WinBatch V2 BATCH: Executing batch with {task_count} tasks")
+            return self._execute_batch()
         else:
-            # Return success for queued command
-            return (0, f"WinBatch-Queued-{len(conn.task_queue)}", "")
-
-    def _is_likely_last_task(self, cmd):
-        """Detect if this is likely the last task"""
-        # Look for common last task patterns
-        last_task_patterns = [
-            'echo', 'debug', 'Get-Date', 'Test-Path', 'Write-Host',
-            'cleanup', 'final', 'end', 'complete', 'finish',
-            'Get-Service', 'Get-Process'  # Common debug commands
-        ]
-        
-        cmd_lower = cmd.lower()
-        return any(pattern.lower() in cmd_lower for pattern in last_task_patterns)
+            # Возвращаем успех для промежуточных задач
+            return (0, f"WinBatch-Queued-Task-{task_count}", "")
 
     def put_file(self, in_path, out_path):
-        """Upload file using SCP"""
+        """Загружает файл через SCP"""
         scp_cmd = ['scp']
         scp_cmd.extend(['-o', 'StrictHostKeyChecking=no'])
         scp_cmd.extend(['-o', 'UserKnownHostsFile=/dev/null'])
@@ -282,7 +325,7 @@ class Connection(ConnectionBase):
             raise AnsibleError(f"SCP upload failed: {result.stderr}")
 
     def fetch_file(self, in_path, out_path):
-        """Download file using SCP"""
+        """Скачивает файл через SCP"""
         scp_cmd = ['scp']
         scp_cmd.extend(['-o', 'StrictHostKeyChecking=no'])
         scp_cmd.extend(['-o', 'UserKnownHostsFile=/dev/null'])
@@ -305,17 +348,20 @@ class Connection(ConnectionBase):
                 raise AnsibleError(f"SCP download failed: {result.stderr}")
 
     def close(self):
-        """Close connection (persistent connection remains alive)"""
-        display.vv(f"WinBatch V2: Connection closed for {self.connection_key} (persistent connection remains)")
+        """Закрывает соединение"""
+        display.vv(f"WinBatch V2 BATCH: Connection closed for {self.host_key}")
         super(Connection, self).close()
 
-# Cleanup function for persistent connections
-def cleanup_persistent_connections():
-    """Clean up all persistent connections on exit"""
-    with _CONNECTION_LOCK:
-        for conn in _PERSISTENT_CONNECTIONS.values():
-            conn.close()
-        _PERSISTENT_CONNECTIONS.clear()
+# Cleanup function
+def cleanup_batch_state():
+    """Очищает состояние batch при выходе"""
+    try:
+        if os.path.exists(_BATCH_STATE_FILE):
+            os.remove(_BATCH_STATE_FILE)
+        if os.path.exists(_BATCH_LOCK_FILE):
+            os.remove(_BATCH_LOCK_FILE)
+    except:
+        pass
 
 # Register cleanup
-atexit.register(cleanup_persistent_connections)
+atexit.register(cleanup_batch_state)
