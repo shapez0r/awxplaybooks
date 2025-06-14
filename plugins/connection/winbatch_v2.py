@@ -128,12 +128,18 @@ class PersistentSSHConnection:
         ]
         
         for i, cmd in enumerate(commands):
-            # Escape PowerShell special characters
-            escaped_cmd = cmd.replace('"', '`"').replace('$', '`$')
+            # Convert bash/shell commands to PowerShell equivalents
+            if cmd.startswith('echo '):
+                # Convert echo command to PowerShell Write-Host
+                echo_text = cmd[5:].strip().strip('"').strip("'")
+                ps_cmd = f'Write-Host "{echo_text}"'
+            else:
+                # For other commands, try to execute as-is
+                ps_cmd = cmd.replace('"', '`"').replace('$', '`$')
+            
             ps_lines.extend([
                 f'Write-Host "WinBatch-Task-{i+1}-of-{len(commands)}"',
-                f'try {{ $Output_{i} = Invoke-Expression "{escaped_cmd}" 2>&1; $ExitCode_{i} = $LASTEXITCODE }} catch {{ $Output_{i} = $_.Exception.Message; $ExitCode_{i} = 1 }}',
-                f'if ($ExitCode_{i} -eq $null) {{ $ExitCode_{i} = 0 }}',
+                f'try {{ $Output_{i} = {ps_cmd}; $ExitCode_{i} = 0 }} catch {{ $Output_{i} = $_.Exception.Message; $ExitCode_{i} = 1 }}',
                 f'Write-Host "Task-{i+1}-Result: RC=$ExitCode_{i}"',
                 f'$Output_{i} | Out-String | Write-Host'
             ])
