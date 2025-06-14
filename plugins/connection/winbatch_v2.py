@@ -256,17 +256,21 @@ class Connection(ConnectionBase):
             
             display.vv(f"WinBatch V2: Command executed - RC: {result['rc']}")
             
-            # Возвращаем строки как требует Ansible
-            stdout = str(result.get('stdout', ''))
-            stderr = str(result.get('stderr', ''))
+            # Возвращаем file-like объекты как требует Ansible
+            stdout_str = str(result.get('stdout', ''))
+            stderr_str = str(result.get('stderr', ''))
             rc = int(result.get('rc', 1))
             
-            return (stdout, stderr, rc)
+            # Создаем StringIO объекты
+            stdout_io = StringIO(stdout_str)
+            stderr_io = StringIO(stderr_str)
+            
+            return (stdout_io, stderr_io, rc)
             
         except Exception as e:
             error_msg = f"WinBatch V2: Command execution failed: {str(e)}"
             display.vv(error_msg)
-            return ("", str(error_msg), 1)
+            return (StringIO(""), StringIO(str(error_msg)), 1)
 
     def _parse_command(self, cmd, task_id):
         """Простой парсер команд"""
