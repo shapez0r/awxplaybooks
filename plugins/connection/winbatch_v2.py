@@ -239,7 +239,9 @@ class Connection(ConnectionBase):
             ssh_cmd.extend(['-i', conn_info['key_file']])
             
         ssh_cmd.append(f"{conn_info['user']}@{conn_info['host']}")
-        ssh_cmd.append(f'powershell -Command "{mega_script}"')
+        # Экранируем кавычки для PowerShell
+        escaped_script = mega_script.replace('"', '\\"')
+        ssh_cmd.append(f'powershell -Command "{escaped_script}"')
         
         display.vv(f"WinBatch V2 BATCH: Executing MEGA script via single SSH connection")
         
