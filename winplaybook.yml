@@ -6,6 +6,9 @@
   vars:
     ansible_shell_type: powershell
     ansible_winbatch_batch_size: 20
+    ansible_winbatch_status_interval: 5
+    ansible_winbatch_execution_timeout: 120
+    ansible_winbatch_ssh_timeout: 60
   
   tasks:
     - name: Create directory C:\test
