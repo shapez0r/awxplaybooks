@@ -304,12 +304,12 @@ $FinalResults = @{
 $FinalResults | ConvertTo-Json -Depth 4 | Set-Content "$TasksFile.final"
 Write-Host "WinBatch V2 Simple Executor completed!"'''
         
-        # Создаем скрипт через echo команду (избегаем сложных кавычек)
+        # Создаем скрипт через более надежный метод
         import base64
         script_b64 = base64.b64encode(simple_executor.encode('utf-8')).decode('ascii')
         
-        # Используем PowerShell для декодирования base64 и создания файла
-        create_script_cmd = f'[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("{script_b64}")) | Out-File -FilePath "{batch_dir}\\executor_v2.ps1" -Encoding UTF8'
+        # Используем PowerShell для декодирования base64 и создания файла с правильным экранированием
+        create_script_cmd = f"""$base64Content = '{script_b64}'; [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($base64Content)) | Out-File -FilePath "{batch_dir}\\executor_v2.ps1" -Encoding UTF8; Write-Host "Executor script created successfully\""""
         
         result = self._execute_ssh_command(['powershell', '-Command', create_script_cmd])
         
@@ -438,11 +438,11 @@ Write-Host "WinBatch V2 Simple Executor completed!"'''
         
         tasks_json = json.dumps(tasks, indent=2)
         
-        # Отправляем задачи на удаленную машину через base64
+        # Отправляем задачи на удаленную машину через base64 с надежным экранированием
         import base64
         tasks_b64 = base64.b64encode(tasks_json.encode('utf-8')).decode('ascii')
         
-        upload_cmd = f'[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("{tasks_b64}")) | Set-Content "{tasks_file}" -Encoding UTF8; Write-Host "Tasks uploaded successfully"'
+        upload_cmd = f"""$tasksContent = '{tasks_b64}'; [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($tasksContent)) | Set-Content "{tasks_file}" -Encoding UTF8; Write-Host "Tasks uploaded successfully\""""
         
         result = self._execute_ssh_command(['powershell', '-Command', upload_cmd])
         if result['rc'] != 0:
