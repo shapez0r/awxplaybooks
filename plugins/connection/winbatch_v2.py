@@ -167,11 +167,8 @@ class Connection(ConnectionBase):
         return default_value
 
     def _connect(self):
-        """Устанавливает SSH соединение используя стандартные инструменты"""
-        if self.ssh_process:
-            return self
-            
-        display.vv("WinBatch V2: Establishing SSH connection")
+        """Устанавливает минимальное соединение"""
+        display.vv("WinBatch V2: Establishing minimal connection")
         
         # Генерируем уникальный ID сессии
         self.batch_session_id = f"winbatch_v2_{int(time.time())}_{os.getpid()}"
@@ -180,13 +177,10 @@ class Connection(ConnectionBase):
         self.temp_dir = tempfile.mkdtemp(prefix='winbatch_v2_')
         
         try:
-            # Устанавливаем SSH соединение через стандартные средства
-            self._establish_ssh_connection()
-            
-            # Настраиваем окружение на удаленной машине
+            # Простая проверка подключения
             self._setup_remote_environment()
             
-            display.vv("WinBatch V2: SSH connection established successfully")
+            display.vv("WinBatch V2: Connection established successfully")
             
         except Exception as e:
             self._cleanup()
@@ -194,67 +188,7 @@ class Connection(ConnectionBase):
             
         return self
 
-    def _establish_ssh_connection(self):
-        """Устанавливает SSH соединение используя стандартные методы"""
-        
-        display.vv("WinBatch V2: Starting SSH connection establishment")
-        
-        # Получаем параметры подключения - поддержка разных версий API
-        play_context = getattr(self, '_play_context', None) or getattr(self, 'play_context', None)
-        if not play_context:
-            raise AnsibleConnectionFailure("Cannot access play context")
-            
-        host = play_context.remote_addr
-        user = play_context.remote_user
-        port = play_context.port or 22
-        
-        display.vv(f"WinBatch V2: Connecting to {user}@{host}:{port}")
-        
-        # Создаем master socket для SSH multiplexing
-        control_path = os.path.join(self.temp_dir, 'ssh_control')
-        
-        ssh_cmd = [
-            'ssh',
-            '-o', 'ControlMaster=yes',
-            '-o', f'ControlPath={control_path}',
-            '-o', 'ControlPersist=600',
-            '-o', 'StrictHostKeyChecking=no',
-            '-o', 'UserKnownHostsFile=/dev/null',
-            '-o', f'ConnectTimeout={self.ssh_timeout}',
-            '-o', 'ServerAliveInterval=30',
-            '-o', 'ServerAliveCountMax=3',
-            '-p', str(port),
-            f'{user}@{host}',
-            'echo "WinBatch V2 SSH connection established"'
-        ]
-        
-        # Если есть SSH ключ
-        if play_context.private_key_file:
-            ssh_cmd.extend(['-i', play_context.private_key_file])
-        
-        display.vv(f"WinBatch V2: SSH command: {' '.join(ssh_cmd)}")
-        
-        try:
-            # Устанавливаем соединение
-            result = subprocess.run(ssh_cmd, 
-                                  capture_output=True, 
-                                  text=True, 
-                                  timeout=self.ssh_timeout)
-            
-            display.vv(f"WinBatch V2: SSH result - RC: {result.returncode}, STDOUT: {result.stdout[:200]}, STDERR: {result.stderr[:200]}")
-            
-            if result.returncode != 0:
-                raise AnsibleConnectionFailure(f"SSH connection failed: {result.stderr}")
-            
-            self.ssh_master_socket = control_path
-            display.vv("WinBatch V2: SSH master connection established successfully")
-            
-        except subprocess.TimeoutExpired:
-            display.vv(f"WinBatch V2: SSH connection timeout after {self.ssh_timeout} seconds")
-            raise AnsibleConnectionFailure(f"SSH connection timeout after {self.ssh_timeout} seconds")
-        except Exception as e:
-            display.vv(f"WinBatch V2: SSH connection exception: {str(e)}")
-            raise AnsibleConnectionFailure(f"SSH connection error: {str(e)}")
+
 
     def _setup_remote_environment(self):
         """Настраивает минимальное окружение на удаленной Windows машине"""
@@ -271,9 +205,8 @@ class Connection(ConnectionBase):
         self.batch_script_path = "C:\\temp"  # Простая рабочая директория
 
     def _execute_ssh_command(self, cmd, input_data=None):
-        """Выполняет команду через SSH соединение"""
-        if not self.ssh_master_socket:
-            raise AnsibleConnectionFailure("SSH connection not established")
+        """Выполняет команду через SSH соединение - упрощенная версия"""
+        display.vv(f"WinBatch V2: _execute_ssh_command called with: {cmd}")
         
         # Получаем параметры подключения - поддержка разных версий API
         play_context = getattr(self, '_play_context', None) or getattr(self, 'play_context', None)
@@ -284,13 +217,23 @@ class Connection(ConnectionBase):
         user = play_context.remote_user
         port = play_context.port or 22
         
+        display.vv(f"WinBatch V2: Connecting to {user}@{host}:{port}")
+        
+        # Простое SSH соединение без multiplexing для надежности
         ssh_cmd = [
             'ssh',
-            '-o', f'ControlPath={self.ssh_master_socket}',
-            '-o', 'ControlMaster=no',
+            '-o', 'StrictHostKeyChecking=no',
+            '-o', 'UserKnownHostsFile=/dev/null',
+            '-o', f'ConnectTimeout={self.ssh_timeout}',
+            '-o', 'ServerAliveInterval=30',
+            '-o', 'ServerAliveCountMax=3',
             '-p', str(port),
             f'{user}@{host}'
         ]
+        
+        # Если есть SSH ключ
+        if play_context.private_key_file:
+            ssh_cmd.extend(['-i', play_context.private_key_file])
         
         # Добавляем команду
         if isinstance(cmd, list):
@@ -298,7 +241,7 @@ class Connection(ConnectionBase):
         else:
             ssh_cmd.append(cmd)
         
-        display.vvv(f"WinBatch V2: Executing SSH command: {' '.join(ssh_cmd)}")
+        display.vv(f"WinBatch V2: SSH command: {' '.join(ssh_cmd[:6])}... (truncated for security)")
         
         try:
             result = subprocess.run(ssh_cmd,
@@ -307,18 +250,22 @@ class Connection(ConnectionBase):
                                   text=True,
                                   timeout=self.execution_timeout)
             
+            display.vv(f"WinBatch V2: SSH result - RC: {result.returncode}, STDOUT len: {len(result.stdout)}, STDERR len: {len(result.stderr)}")
+            
             return {
                 'stdout': result.stdout,
                 'stderr': result.stderr,
                 'rc': result.returncode
             }
         except subprocess.TimeoutExpired:
+            display.vv(f"WinBatch V2: SSH command timeout after {self.execution_timeout} seconds")
             return {
                 'stdout': '',
-                'stderr': 'Command timeout expired',
+                'stderr': f'Command timeout expired after {self.execution_timeout} seconds',
                 'rc': 124
             }
         except Exception as e:
+            display.vv(f"WinBatch V2: SSH command exception: {str(e)}")
             return {
                 'stdout': '',
                 'stderr': str(e),
@@ -493,29 +440,6 @@ class Connection(ConnectionBase):
     def close(self):
         """Закрывает соединение и очищает ресурсы"""
         display.vv("WinBatch V2: Closing connection and cleaning up")
-        
-        # Выполняем оставшиеся задачи в очереди
-        if self.batch_queue:
-            try:
-                self._execute_batch()
-            except:
-                pass
-            
-        # Очищаем удаленную рабочую директорию
-        if self.batch_script_path and self.ssh_master_socket:
-            cleanup_cmd = f'Remove-Item "{self.batch_script_path}" -Recurse -Force -ErrorAction SilentlyContinue'
-            try:
-                self._execute_ssh_command(['powershell', '-Command', cleanup_cmd])
-            except:
-                pass
-            
-        # Закрываем SSH соединение
-        if self.ssh_master_socket and os.path.exists(self.ssh_master_socket):
-            try:
-                subprocess.run(['ssh', '-O', 'exit', '-o', f'ControlPath={self.ssh_master_socket}', 'dummy'], 
-                             capture_output=True, timeout=10)
-            except:
-                pass
         
         # Очищаем временную директорию
         self._cleanup()
