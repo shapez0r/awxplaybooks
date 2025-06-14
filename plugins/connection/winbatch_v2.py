@@ -244,161 +244,134 @@ class Connection(ConnectionBase):
         """Настраивает окружение на удаленной Windows машине"""
         display.vv("WinBatch V2: Setting up remote environment")
         
-        setup_script = f'''
+        # Создаем рабочую директорию
+        batch_dir = f"C:\\temp\\winbatch_v2_{self.batch_session_id}"
+        
+        # Шаг 1: Создаем директорию
+        create_dir_cmd = f'if (!(Test-Path "{batch_dir}")) {{ New-Item -ItemType Directory -Path "{batch_dir}" -Force | Out-Null; Write-Host "Created batch directory: {batch_dir}" }}'
+        result = self._execute_ssh_command(['powershell', '-Command', create_dir_cmd])
+        
+        if result['rc'] != 0:
+            raise AnsibleConnectionFailure(f"Failed to create batch directory: {result['stderr']}")
+        
+        # Шаг 2: Создаем исполнитель через отдельные команды для избежания проблем с экранированием
+        executor_script_content = '''param([string]$TasksFile, [string]$StatusFile, [int]$StatusInterval = 5)
+
 $ErrorActionPreference = "Continue"
-$BatchDir = "C:\\temp\\winbatch_v2_{self.batch_session_id}"
-
-# Создаем рабочую директорию
-if (!(Test-Path $BatchDir)) {{
-    New-Item -ItemType Directory -Path $BatchDir -Force | Out-Null
-    Write-Host "Created batch directory: $BatchDir"
-}}
-
-# Создаем улучшенный исполнитель
-$ExecutorScript = @"
-param([string]`$TasksFile, [string]`$StatusFile, [int]`$StatusInterval = 5)
-
-`$ErrorActionPreference = "Continue"
 Write-Host "WinBatch V2 Executor starting..."
 
-# Проверяем файл задач
-if (!(Test-Path `$TasksFile)) {{
-    Write-Error "Tasks file not found: `$TasksFile"
+if (!(Test-Path $TasksFile)) {
+    Write-Error "Tasks file not found: $TasksFile"
     exit 1
-}}
+}
 
-try {{
-    `$TasksContent = Get-Content `$TasksFile -Raw
-    `$Tasks = `$TasksContent | ConvertFrom-Json
-}} catch {{
-    Write-Error "Failed to parse tasks file: `$_"
+try {
+    $TasksContent = Get-Content $TasksFile -Raw
+    $Tasks = $TasksContent | ConvertFrom-Json
+} catch {
+    Write-Error "Failed to parse tasks file: $_"
     exit 1
-}}
+}
 
-`$Results = @()
-`$TotalTasks = `$Tasks.Count
-`$CompletedTasks = 0
+$Results = @()
+$TotalTasks = $Tasks.Count
+$CompletedTasks = 0
 
-Write-Host "Processing `$TotalTasks tasks..."
+Write-Host "Processing $TotalTasks tasks..."
 
-foreach (`$Task in `$Tasks) {{
-    `$TaskStart = Get-Date
-    `$TaskResult = @{{
-        task_id = `$Task.task_id
-        name = `$Task.name
+foreach ($Task in $Tasks) {
+    $TaskStart = Get-Date
+    $TaskResult = @{
+        task_id = $Task.task_id
+        name = $Task.name
         status = "running"
-        start_time = `$TaskStart.ToString("yyyy-MM-dd HH:mm:ss")
+        start_time = $TaskStart.ToString("yyyy-MM-dd HH:mm:ss")
         stdout = ""
         stderr = ""
         rc = 0
         duration = 0
-    }}
+    }
     
-    try {{
-        Write-Host "Executing: `$(`$Task.name)"
+    try {
+        Write-Host "Executing: $($Task.name)"
         
-        # Выполняем команду в зависимости от типа
-        if (`$Task.command -match "^powershell" -or `$Task.command -match "Get-|Set-|New-|Remove-") {{
-            # PowerShell команда
-            `$Output = Invoke-Expression `$Task.command 2>&1
-            `$TaskResult.stdout = `$Output | Out-String
-            `$TaskResult.rc = `$LASTEXITCODE
-        }} 
-        elseif (`$Task.command -match "mkdir|dir|copy|move|del") {{
-            # CMD команда
-            `$Output = cmd /c "`$(`$Task.command)" 2>&1
-            `$TaskResult.stdout = `$Output | Out-String
-            `$TaskResult.rc = `$LASTEXITCODE
-        }}
-        else {{
-            # Общая команда
-            `$Output = Invoke-Expression `$Task.command 2>&1
-            `$TaskResult.stdout = `$Output | Out-String
-            `$TaskResult.rc = `$LASTEXITCODE
-        }}
+        if ($Task.command -match "Get-|Set-|New-|Remove-|Write-Host") {
+            $Output = Invoke-Expression $Task.command 2>&1
+            $TaskResult.stdout = $Output | Out-String
+            $TaskResult.rc = if ($LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+        } 
+        elseif ($Task.command -match "mkdir|dir|copy|move|del") {
+            $Output = cmd /c "$($Task.command)" 2>&1
+            $TaskResult.stdout = $Output | Out-String
+            $TaskResult.rc = $LASTEXITCODE
+        }
+        else {
+            $Output = Invoke-Expression $Task.command 2>&1
+            $TaskResult.stdout = $Output | Out-String
+            $TaskResult.rc = if ($LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+        }
         
-        if (`$TaskResult.rc -eq 0) {{
-            `$TaskResult.status = "completed"
-        }} else {{
-            `$TaskResult.status = "failed"
-            `$TaskResult.stderr = "Command exited with code `$(`$TaskResult.rc)"
-        }}
+        if ($TaskResult.rc -eq 0) {
+            $TaskResult.status = "completed"
+        } else {
+            $TaskResult.status = "failed"
+            $TaskResult.stderr = "Command exited with code $($TaskResult.rc)"
+        }
         
-    }} catch {{
-        `$TaskResult.status = "failed"
-        `$TaskResult.stderr = `$_.Exception.Message
-        `$TaskResult.rc = 1
-        Write-Host "Task failed: `$(`$_.Exception.Message)"
-    }}
+    } catch {
+        $TaskResult.status = "failed"
+        $TaskResult.stderr = $_.Exception.Message
+        $TaskResult.rc = 1
+        Write-Host "Task failed: $($_.Exception.Message)"
+    }
     
-    `$TaskEnd = Get-Date
-    `$TaskResult.end_time = `$TaskEnd.ToString("yyyy-MM-dd HH:mm:ss")
-    `$TaskResult.duration = (`$TaskEnd - `$TaskStart).TotalSeconds
+    $TaskEnd = Get-Date
+    $TaskResult.end_time = $TaskEnd.ToString("yyyy-MM-dd HH:mm:ss")
+    $TaskResult.duration = ($TaskEnd - $TaskStart).TotalSeconds
     
-    `$Results += `$TaskResult
-    `$CompletedTasks++
+    $Results += $TaskResult
+    $CompletedTasks++
     
-    Write-Host "Task '`$(`$Task.name)' completed with status: `$(`$TaskResult.status)"
-    
-    # Обновляем статус
-    `$StatusUpdate = @{{
-        session_id = "{self.batch_session_id}"
-        total_tasks = `$TotalTasks
-        completed_tasks = `$CompletedTasks
-        current_task = if (`$CompletedTasks -lt `$TotalTasks) {{ `$Tasks[`$CompletedTasks].name }} else {{ "All completed" }}
-        status = if (`$CompletedTasks -lt `$TotalTasks) {{ "running" }} else {{ "completed" }}
-        timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    }}
-    
-    try {{
-        `$StatusUpdate | ConvertTo-Json | Set-Content `$StatusFile -ErrorAction SilentlyContinue
-    }} catch {{
-        # Игнорируем ошибки записи статуса
-    }}
-}}
+    Write-Host "Task '$($Task.name)' completed with status: $($TaskResult.status)"
+}
 
-# Сохраняем финальные результаты
-`$FinalResults = @{{
-    session_id = "{self.batch_session_id}"
+$FinalResults = @{
+    session_id = "''' + self.batch_session_id + '''"
     status = "completed"
-    total_tasks = `$TotalTasks
-    completed_tasks = `$CompletedTasks
-    results = `$Results
-    execution_time = (`$Results | Measure-Object duration -Sum).Sum
+    total_tasks = $TotalTasks
+    completed_tasks = $CompletedTasks
+    results = $Results
+    execution_time = ($Results | Measure-Object duration -Sum).Sum
     timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-}}
+}
 
-try {{
-    `$FinalResults | ConvertTo-Json -Depth 4 | Set-Content "`$TasksFile.final"
-    Write-Host "Results saved to: `$TasksFile.final"
-}} catch {{
-    Write-Error "Failed to save results: `$_"
+try {
+    $FinalResults | ConvertTo-Json -Depth 4 | Set-Content "$TasksFile.final"
+    Write-Host "Results saved to: $TasksFile.final"
+} catch {
+    Write-Error "Failed to save results: $_"
     exit 1
-}}
+}
 
-Write-Host "WinBatch V2 Executor completed successfully!"
-"@
-
-# Сохраняем исполнителя
-try {{
-    `$ExecutorScript | Set-Content "$BatchDir\\executor_v2.ps1" -Encoding UTF8
-    Write-Host "Executor script created successfully"
-}} catch {{
-    Write-Error "Failed to create executor script: `$_"
-    exit 1
-}}
-
-Write-Host "WinBatch V2 environment setup completed: $BatchDir"
+Write-Host "WinBatch V2 Executor completed successfully!"'''
+        
+        # Создаем временный файл для скрипта
+        import base64
+        script_b64 = base64.b64encode(executor_script_content.encode('utf-8')).decode('ascii')
+        
+        # Создаем скрипт через base64 для избежания проблем с кавычками
+        create_script_cmd = f'''
+$scriptContent = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("{script_b64}"))
+$scriptContent | Set-Content "{batch_dir}\\executor_v2.ps1" -Encoding UTF8
+Write-Host "Executor script created successfully"
 '''
         
-        # Выполняем setup через SSH
-        cmd = ['powershell', '-Command', setup_script]
-        result = self._execute_ssh_command(cmd)
+        result = self._execute_ssh_command(['powershell', '-Command', create_script_cmd])
         
         if result['rc'] != 0:
-            raise AnsibleConnectionFailure(f"Failed to setup remote environment: {result['stderr']}")
+            raise AnsibleConnectionFailure(f"Failed to create executor script: {result['stderr']}")
             
-        self.batch_script_path = f"C:\\temp\\winbatch_v2_{self.batch_session_id}"
+        self.batch_script_path = batch_dir
         display.vv(f"WinBatch V2: Environment setup completed at {self.batch_script_path}")
 
     def _execute_ssh_command(self, cmd, input_data=None):

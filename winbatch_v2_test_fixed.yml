@@ -1,0 +1,59 @@
+---
+# WinBatch V2 Test Playbook - Fixed Version
+# Тестирует исправленную версию плагина WinBatch V2
+name: "WinBatch V2 Fixed Version Test"
+hosts: windows_hosts
+gather_facts: false
+connection: winbatch_v2
+
+vars:
+  test_session: "winbatch_v2_fixed_test_{{ ansible_date_time.epoch }}"
+
+tasks:
+  - name: "🔧 Test 1: Simple PowerShell Command"
+    win_shell: "Write-Host 'Hello from WinBatch V2 Fixed!'"
+    register: test1_result
+
+  - name: "📁 Test 2: Create Test Directory"
+    win_shell: "New-Item -ItemType Directory -Path 'C:\\temp\\winbatch_test' -Force"
+    register: test2_result
+
+  - name: "📝 Test 3: Create Test File"
+    win_shell: "Set-Content -Path 'C:\\temp\\winbatch_test\\test.txt' -Value 'WinBatch V2 Test File'"
+    register: test3_result
+
+  - name: "📖 Test 4: Read Test File"
+    win_shell: "Get-Content 'C:\\temp\\winbatch_test\\test.txt'"
+    register: test4_result
+
+  - name: "💻 Test 5: System Information"
+    win_shell: "Get-ComputerInfo | Select-Object WindowsProductName, TotalPhysicalMemory"
+    register: test5_result
+
+  - name: "🔍 Test 6: List Processes"
+    win_shell: "Get-Process | Select-Object -First 5 Name, CPU"
+    register: test6_result
+
+  - name: "🌐 Test 7: Network Configuration"
+    win_shell: "Get-NetIPAddress -AddressFamily IPv4 | Select-Object -First 3 IPAddress, InterfaceAlias"
+    register: test7_result
+
+  - name: "🧹 Test 8: Cleanup Test Files"
+    win_shell: "Remove-Item -Path 'C:\\temp\\winbatch_test' -Recurse -Force -ErrorAction SilentlyContinue"
+    register: test8_result
+
+  - name: "📊 Display Test Results"
+    debug:
+      msg: |
+        🎯 WinBatch V2 Fixed Version Test Results:
+        
+        ✅ Test 1 (Simple Command): {{ test1_result.stdout | default('FAILED') }}
+        ✅ Test 2 (Create Directory): {{ 'SUCCESS' if test2_result.rc == 0 else 'FAILED' }}
+        ✅ Test 3 (Create File): {{ 'SUCCESS' if test3_result.rc == 0 else 'FAILED' }}
+        ✅ Test 4 (Read File): {{ test4_result.stdout | default('FAILED') }}
+        ✅ Test 5 (System Info): {{ 'SUCCESS' if test5_result.rc == 0 else 'FAILED' }}
+        ✅ Test 6 (Processes): {{ 'SUCCESS' if test6_result.rc == 0 else 'FAILED' }}
+        ✅ Test 7 (Network): {{ 'SUCCESS' if test7_result.rc == 0 else 'FAILED' }}
+        ✅ Test 8 (Cleanup): {{ 'SUCCESS' if test8_result.rc == 0 else 'FAILED' }}
+        
+        🚀 WinBatch V2 Fixed Version Test Completed! 
