@@ -188,6 +188,8 @@ class Connection(ConnectionBase):
             # Конвертируем bash команды в PowerShell
             if cmd.startswith('echo '):
                 echo_text = cmd[5:].strip().strip('"').strip("'")
+                # Экранируем кавычки для PowerShell
+                echo_text = echo_text.replace('"', '""')
                 ps_cmd = f'Write-Host "{echo_text}"'
             elif cmd.startswith('whoami'):
                 ps_cmd = '$env:USERNAME'
@@ -195,13 +197,23 @@ class Connection(ConnectionBase):
                 ps_cmd = '$env:COMPUTERNAME'
             elif cmd.startswith('pwd'):
                 ps_cmd = 'Get-Location'
+            elif cmd.startswith('ls') or cmd.startswith('dir'):
+                ps_cmd = 'Get-ChildItem'
+            elif cmd.startswith('cat ') or cmd.startswith('type '):
+                file_path = cmd.split(' ', 1)[1].strip()
+                ps_cmd = f'Get-Content "{file_path}"'
             else:
-                ps_cmd = cmd.replace('"', '`"').replace('$', '`$')
+                # Для других команд пытаемся выполнить как есть
+                ps_cmd = f'cmd /c "{cmd}"'
+            
+            # Безопасное имя команды для отображения
+            safe_cmd = cmd.replace('"', '""')[:30]
             
             script_lines.extend([
-                f'Write-Host "=== TASK {i+1}/{len(tasks)}: {cmd[:30]}... ==="',
+                f'Write-Host "=== TASK {i+1}/{len(tasks)}: {safe_cmd}... ==="',
                 f'$TaskStart_{i} = Get-Date',
-                f'$ExitCode_{i} = 0; $Output_{i} = ""',
+                f'$ExitCode_{i} = 0',
+                f'$Output_{i} = ""',
                 f'try {{',
                 f'    $Output_{i} = {ps_cmd}',
                 f'    if ($Output_{i}) {{ Write-Host $Output_{i} }}',
@@ -222,7 +234,8 @@ class Connection(ConnectionBase):
             f'Write-Host "All {len(tasks)} tasks completed"'
         ])
         
-        return '; '.join(script_lines)
+        # Возвращаем многострочный скрипт, а не строку с точками с запятой
+        return '\n'.join(script_lines)
 
     def _execute_single_ssh_batch(self, conn_info, mega_script):
         """Выполняет мега-скрипт через ЕДИНСТВЕННОЕ SSH соединение"""
@@ -241,8 +254,9 @@ class Connection(ConnectionBase):
         ssh_cmd.append(f"{conn_info['user']}@{conn_info['host']}")
         
         # Используем base64 для передачи скрипта без проблем с кавычками
+        # PowerShell -EncodedCommand требует UTF-16LE кодировку
         import base64
-        script_bytes = mega_script.encode('utf-8')
+        script_bytes = mega_script.encode('utf-16le')
         script_b64 = base64.b64encode(script_bytes).decode('ascii')
         ssh_cmd.append(f'powershell -EncodedCommand {script_b64}')
         
