@@ -1,0 +1,68 @@
+---
+- name: Test WinBatch V3 Connection Plugin
+  hosts: all
+  gather_facts: false
+  connection: winbatch_v3
+  vars:
+    ansible_port: 22
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    # Настройки таймаутов для WinBatch V3
+    playbook_timeout: 45  # Общий таймаут для всего плейбука
+    command_timeout: 30   # Таймаут для выполнения одной команды
+    queue_timeout: 1      # Таймаут для ожидания команды в очереди
+  
+  tasks:
+    - name: Test basic connectivity
+      raw: Write-Output "WinBatch V3 connection test successful"
+      register: connectivity_test
+      
+    - name: Display connectivity test result
+      debug:
+        var: connectivity_test.stdout_lines
+
+    - name: Get system information
+      raw: |
+        $info = Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, TotalPhysicalMemory
+        ConvertTo-Json -InputObject $info
+      register: system_info
+      
+    - name: Display system information
+      debug:
+        var: system_info.stdout_lines
+
+    - name: Test multiple commands in sequence
+      raw: |
+        Write-Output "Command 1"
+        Start-Sleep -Seconds 1
+        Write-Output "Command 2"
+        Start-Sleep -Seconds 1
+        Write-Output "Command 3"
+      register: sequence_test
+      
+    - name: Display sequence test results
+      debug:
+        var: sequence_test.stdout_lines
+
+    - name: Test file operations
+      raw: |
+        $testPath = "C:\temp\winbatch_v3_test"
+        New-Item -Path $testPath -ItemType Directory -Force
+        Set-Content -Path "$testPath\test.txt" -Value "WinBatch V3 test file content"
+        Get-Content "$testPath\test.txt"
+        Remove-Item -Path $testPath -Recurse -Force
+      register: file_ops
+      
+    - name: Display file operations result
+      debug:
+        var: file_ops.stdout_lines
+
+    - name: Test error handling
+      raw: |
+        Write-Error "This is a test error"
+        exit 1
+      register: error_test
+      ignore_errors: yes
+      
+    - name: Display error test result
+      debug:
+        var: error_test 
