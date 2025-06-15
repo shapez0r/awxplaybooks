@@ -235,7 +235,10 @@ class Connection(ConnectionBase):
         ])
         
         # Возвращаем многострочный скрипт, а не строку с точками с запятой
-        return '\n'.join(script_lines)
+        final_script = '\n'.join(script_lines)
+        display.vv(f"WinBatch V2 BATCH: Generated PowerShell script ({len(final_script)} chars)")
+        display.vv(f"WinBatch V2 BATCH: Script preview: {final_script[:300]}...")
+        return final_script
 
     def _execute_single_ssh_batch(self, conn_info, mega_script):
         """Выполняет мега-скрипт через ЕДИНСТВЕННОЕ SSH соединение"""
@@ -261,6 +264,9 @@ class Connection(ConnectionBase):
         ssh_cmd.append(f'powershell -EncodedCommand {script_b64}')
         
         display.vv(f"WinBatch V2 BATCH: Executing MEGA script via single SSH connection")
+        display.vv(f"WinBatch V2 BATCH: SSH command: {' '.join(ssh_cmd[:5])}... (truncated)")
+        display.vv(f"WinBatch V2 BATCH: Script length: {len(mega_script)} chars")
+        display.vv(f"WinBatch V2 BATCH: Base64 length: {len(script_b64)} chars")
         
         start_time = time.time()
         
@@ -269,6 +275,14 @@ class Connection(ConnectionBase):
             execution_time = time.time() - start_time
             
             display.vv(f"WinBatch V2 BATCH: SSH execution completed in {execution_time:.1f}s")
+            display.vv(f"WinBatch V2 BATCH: Return code: {result.returncode}")
+            display.vv(f"WinBatch V2 BATCH: Stdout length: {len(result.stdout)} chars")
+            display.vv(f"WinBatch V2 BATCH: Stderr length: {len(result.stderr)} chars")
+            
+            if result.stdout:
+                display.vv(f"WinBatch V2 BATCH: Stdout preview: {result.stdout[:200]}...")
+            if result.stderr:
+                display.vv(f"WinBatch V2 BATCH: Stderr preview: {result.stderr[:200]}...")
             
             # Фильтруем SSH warnings из stderr
             filtered_stderr = self._filter_ssh_warnings(result.stderr)
