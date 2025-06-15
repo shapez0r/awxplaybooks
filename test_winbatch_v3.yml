@@ -49,7 +49,6 @@
         New-Item -Path $testPath -ItemType Directory -Force
         Set-Content -Path "$testPath\test.txt" -Value "WinBatch V3 test file content"
         Get-Content "$testPath\test.txt"
-        Remove-Item -Path $testPath -Recurse -Force
       register: file_ops
       
     - name: Display file operations result
