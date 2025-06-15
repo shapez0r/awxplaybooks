@@ -18,6 +18,7 @@ import uuid
 import tempfile
 import fcntl
 import atexit
+from io import StringIO
 
 from ansible.plugins.connection import ConnectionBase
 from ansible.errors import AnsibleConnectionFailure, AnsibleError, AnsibleFileNotFound
@@ -134,7 +135,7 @@ class Connection(ConnectionBase):
             state = self._get_batch_state()
             
             if self.host_key not in state or state[self.host_key]['batch_completed']:
-                return (0, "Batch already completed", "")
+                return (0, "Batch already completed", StringIO(""))
             
             if state[self.host_key]['batch_started']:
                 # Ждем завершения другого процесса
@@ -165,6 +166,12 @@ class Connection(ConnectionBase):
                 execution_time = state[self.host_key]['end_time'] - state[self.host_key]['start_time']
                 display.vv(f"WinBatch V2 BATCH: Completed {len(tasks)} tasks in {execution_time:.1f}s")
                 
+                # Конвертируем результат в правильный формат
+                if len(result) >= 3:
+                    returncode, stdout, stderr = result[0], result[1], result[2]
+                    stderr_io = StringIO(stderr) if isinstance(stderr, str) else stderr
+                    return (returncode, stdout, stderr_io)
+                
                 return result
                 
             except Exception as e:
@@ -172,7 +179,7 @@ class Connection(ConnectionBase):
                 state[self.host_key]['batch_completed'] = True
                 state[self.host_key]['result'] = (1, "", str(e))
                 self._save_batch_state(state)
-                return (1, "", str(e))
+                return (1, "", StringIO(str(e)))
 
     def _create_mega_script(self, tasks):
         """Создает МЕГА PowerShell скрипт для всех задач"""
@@ -339,11 +346,16 @@ class Connection(ConnectionBase):
                 
                 result = state[self.host_key]['result']
                 display.vv("WinBatch V2 BATCH: Batch completed by another process")
+                # Конвертируем результат в правильный формат
+                if len(result) >= 3:
+                    returncode, stdout, stderr = result[0], result[1], result[2]
+                    stderr_io = StringIO(stderr) if isinstance(stderr, str) else stderr
+                    return (returncode, stdout, stderr_io)
                 return tuple(result)
             
             time.sleep(1)
         
-        return (1, "", "Timeout waiting for batch completion")
+        return (1, "", StringIO("Timeout waiting for batch completion"))
 
     def _connect(self):
         """Подключение не нужно - все делается в batch"""
@@ -364,10 +376,13 @@ class Connection(ConnectionBase):
         # Проверяем готов ли batch к выполнению
         if self._is_batch_ready(cmd):
             display.vv(f"WinBatch V2 BATCH: Executing batch with {task_count} tasks")
-            return self._execute_batch()
+            returncode, stdout, stderr = self._execute_batch()
+            # Конвертируем stderr в file-like объект для совместимости с Ansible
+            stderr_io = StringIO(stderr) if isinstance(stderr, str) else stderr
+            return (returncode, stdout, stderr_io)
         else:
-            # Возвращаем успех для промежуточных задач
-            return (0, f"WinBatch-Queued-Task-{task_count}", "")
+            # Возвращаем успех для промежуточных задач с правильными типами
+            return (0, f"WinBatch-Queued-Task-{task_count}", StringIO(""))
 
     def put_file(self, in_path, out_path):
         """Загружает файл через SCP"""
